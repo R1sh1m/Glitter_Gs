@@ -1,3 +1,8 @@
+"""install_addin.py — Turnkey installer for the Glitter_Gs Conveyor Add-In.
+
+Deploys the self-contained conveyor_addin package to Autodesk Fusion's active API AddIns directories.
+"""
+
 import os
 import shutil
 
