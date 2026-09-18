@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+<<<<<<< HEAD
+import json
+=======
 """
 fusion_conveyor_generator.py
 ---------------------------------------------------------------------------
@@ -30,6 +33,7 @@ ARCHITECTURE:
 """
 
 import csv
+>>>>>>> origin/main
 import math
 import os
 import traceback
@@ -111,6 +115,33 @@ def _compute_repeated_positions(total_length_mm: float, max_spacing_mm: float, e
 
 
 def validate_inputs(params: ConveyorInput) -> None:
+<<<<<<< HEAD
+    values = (
+        params.length_mm,
+        params.width_mm,
+        params.height_mm,
+        params.roller_diameter_mm,
+        params.roller_spacing_mm,
+        params.support_spacing_mm,
+        params.side_guard_height_mm,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("All numeric inputs must be finite.")
+    if not (800.0 <= params.length_mm <= 2000.0):
+        raise ValueError("length_mm must be within 800-2000 mm.")
+    if not (300.0 <= params.width_mm <= 600.0):
+        raise ValueError("width_mm must be within 300-600 mm.")
+    if not (500.0 <= params.height_mm <= 900.0):
+        raise ValueError("height_mm must be within 500-900 mm.")
+    if not (40.0 <= params.roller_diameter_mm <= 80.0):
+        raise ValueError("roller_diameter_mm must be within 40-80 mm.")
+    if not (80.0 <= params.roller_spacing_mm <= 150.0):
+        raise ValueError("roller_spacing_mm must be within 80-150 mm.")
+    if not (500.0 <= params.support_spacing_mm <= 1000.0):
+        raise ValueError("support_spacing_mm must be within 500-1000 mm.")
+    if not (0.0 <= params.side_guard_height_mm <= 150.0):
+        raise ValueError("side_guard_height_mm must be within 0-150 mm.")
+=======
     if not (RANGES["L"][0] <= params.length_mm <= RANGES["L"][1]):
         raise ValueError(f"length_mm must be within {RANGES['L'][0]}-{RANGES['L'][1]} mm.")
     if not (RANGES["W"][0] <= params.width_mm <= RANGES["W"][1]):
@@ -125,6 +156,7 @@ def validate_inputs(params: ConveyorInput) -> None:
         raise ValueError(f"support_spacing_mm must be within {RANGES['S'][0]}-{RANGES['S'][1]} mm.")
     if not (RANGES["G"][0] <= params.side_guard_height_mm <= RANGES["G"][1]):
         raise ValueError(f"side_guard_height_mm must be within {RANGES['G'][0]}-{RANGES['G'][1]} mm.")
+>>>>>>> origin/main
     if not params.side_guards and params.side_guard_height_mm > 1e-9:
         raise ValueError("side_guard_height_mm must be 0 when side_guards is False.")
 
@@ -140,7 +172,8 @@ def derive_configuration(params: ConveyorInput) -> ConveyorDerived:
     support_positions, support_spacing = _compute_repeated_positions(
         total_length_mm=params.length_mm,
         max_spacing_mm=params.support_spacing_mm,
-        edge_offset_mm=0.0,
+        # Keep the centre of each leg pair inside the selected length.
+        edge_offset_mm=20.0,
     )
     effective_guard_height = params.side_guard_height_mm if params.side_guards else 0.0
 
@@ -348,16 +381,74 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
         if occ.name.startswith("ParametricConveyor") or (occ.component and occ.component.name.startswith("ParametricConveyor")):
             occ.deleteMe()
 
+<<<<<<< HEAD
+    def _update_user_parameters(self, params: ConveyorInput) -> None:
+        """Persist the active configuration in Fusion's parametric parameter table."""
+        values = {
+            "GG_Length": params.length_mm,
+            "GG_Width": params.width_mm,
+            "GG_Height": params.height_mm,
+            "GG_RollerDiameter": params.roller_diameter_mm,
+            "GG_RollerSpacing": params.roller_spacing_mm,
+            "GG_SupportSpacing": params.support_spacing_mm,
+            "GG_SideGuardHeight": params.side_guard_height_mm,
+        }
+        user_parameters = self.design.userParameters
+        for name, value_mm in values.items():
+            parameter = user_parameters.itemByName(name)
+            if parameter:
+                parameter.expression = f"{value_mm:g} mm"
+            else:
+                user_parameters.add(
+                    name,
+                    adsk.core.ValueInput.createByString(f"{value_mm:g} mm"),
+                    "mm",
+                    "Glitter_Gs conveyor configuration",
+                )
+
+    def _new_component(
+        self,
+        name: str,
+        x_mm: float,
+        y_mm: float = 0.0,
+        z_mm: float = 0.0,
+        parent: Optional["adsk.fusion.Component"] = None,
+    ) -> Tuple["adsk.fusion.Component", "adsk.fusion.Occurrence"]:
+        owner = parent if parent is not None else self.root
+        transform = adsk.core.Matrix3D.create()
+        transform.translation = adsk.core.Vector3D.create(x_mm / 10.0, y_mm / 10.0, z_mm / 10.0)
+        occurrence = owner.occurrences.addNewComponent(transform)
+        component = occurrence.component
+        component.name = name
+        occurrence.name = name
+        return component, occurrence
+=======
     comp_occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
     comp = comp_occ.component
     comp.name = "ParametricConveyor_Assembly"
     comp_occ.name = "ParametricConveyor_Assembly"
+>>>>>>> origin/main
 
     sketches = comp.sketches
     extrudes = comp.features.extrudeFeatures
     planes = comp.constructionPlanes
     pattern_feats = comp.features.rectangularPatternFeatures
 
+<<<<<<< HEAD
+    def _create_roller_body(
+        self,
+        component: "adsk.fusion.Component",
+        roller_radius_mm: float,
+        roller_width_mm: float,
+    ) -> None:
+        sketch = component.sketches.add(component.xZConstructionPlane)
+        sketch.sketchCurves.sketchCircles.addByCenterRadius(self._point_mm(0.0, 0.0, 0.0), roller_radius_mm / 10.0)
+        profile = sketch.profiles.item(0)
+        extrudes = component.features.extrudeFeatures
+        ext_input = extrudes.createInput(profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+        ext_input.setSymmetricExtent(self._mm(roller_width_mm), True)
+        extrudes.add(ext_input)
+=======
     # -----------------------------------------------------------------
     # A. SIDE RAILS (Sketched on offset plane at FrameHeight - RailH)
     # -----------------------------------------------------------------
@@ -365,6 +456,7 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
     rail_plane_input.setByOffset(comp.xYConstructionPlane, adsk.core.ValueInput.createByString("FrameHeight - RailH"))
     rail_plane = planes.add(rail_plane_input)
     rail_plane.name = "Plane_Rail_Bottom"
+>>>>>>> origin/main
 
     sk_rails = sketches.add(rail_plane)
     sk_rails.name = "Sketch_SideRails"
@@ -672,6 +764,85 @@ def run_batch_demonstration(design: "adsk.fusion.Design", model_refs: Dict[str, 
             status = "PASS" if passed else "FAIL"
             report_lines.append(f"  [{status}] {label} ({detail})")
 
+<<<<<<< HEAD
+    def _build_rollers(self, module_component: "adsk.fusion.Component", params: ConveyorInput, derived: ConveyorDerived) -> None:
+        roller_radius = params.roller_diameter_mm / 2.0
+        for idx, x_pos in enumerate(derived.roller_positions_mm):
+            roller_component, _ = self._new_component(
+                f"GG_Roller_{idx + 1:03d}",
+                x_pos,
+                0.0,
+                params.height_mm + roller_radius,
+                parent=module_component,
+            )
+            self._create_roller_body(roller_component, roller_radius, params.width_mm)
+
+    def _build_supports(self, module_component: "adsk.fusion.Component", params: ConveyorInput, derived: ConveyorDerived) -> None:
+        leg_size = 40.0
+        y_offset = params.width_mm / 2.0 - leg_size
+        for idx, x_pos in enumerate(derived.support_positions_mm):
+            left_component, _ = self._new_component(
+                f"GG_Support_L_{idx + 1:03d}",
+                x_pos - leg_size / 2.0,
+                -y_offset - leg_size,
+                0.0,
+                parent=module_component,
+            )
+            right_component, _ = self._new_component(
+                f"GG_Support_R_{idx + 1:03d}",
+                x_pos - leg_size / 2.0,
+                y_offset,
+                0.0,
+                parent=module_component,
+            )
+            self._create_box(left_component, 0.0, 0.0, leg_size, leg_size, params.height_mm)
+            self._create_box(right_component, 0.0, 0.0, leg_size, leg_size, params.height_mm)
+
+    def _build_side_guards(self, module_component: "adsk.fusion.Component", params: ConveyorInput) -> None:
+        if not params.side_guards or params.side_guard_height_mm <= 0.0:
+            return
+        guard_thickness = 5.0
+        z_origin = params.height_mm
+        left_component, _ = self._new_component(
+            "GG_SideGuard_Left",
+            0.0,
+            -params.width_mm / 2.0 - guard_thickness,
+            z_origin,
+            parent=module_component,
+        )
+        right_component, _ = self._new_component(
+            "GG_SideGuard_Right",
+            0.0,
+            params.width_mm / 2.0,
+            z_origin,
+            parent=module_component,
+        )
+        self._create_box(left_component, 0.0, 0.0, params.length_mm, guard_thickness, params.side_guard_height_mm)
+        self._create_box(right_component, 0.0, 0.0, params.length_mm, guard_thickness, params.side_guard_height_mm)
+
+    def generate(self, params: ConveyorInput) -> Dict[str, object]:
+        summary = summarize_configuration(params)
+        self._update_user_parameters(params)
+        self._delete_stale()
+        module_component, _ = self._new_component("GG_ConveyorModule", 0.0, 0.0, 0.0)
+        derived = summary["derived"]
+
+        self._build_frame(module_component, params)
+        self._build_rollers(module_component, params, derived)
+        self._build_supports(module_component, params, derived)
+        self._build_side_guards(module_component, params)
+        module_component.attributes.add(
+            "GG_Conveyor",
+            "Configuration",
+            deterministic_signature(params, derived),
+        )
+        module_component.attributes.add(
+            "GG_Conveyor",
+            "BOM",
+            json.dumps(summary["bom"], sort_keys=True),
+        )
+        return summary
+=======
         bom_path = export_bom_csv(name, params, derived, output_dir)
         step_path = export_step_file(design, model_refs["component"], name, output_dir)
         report_lines.append(f"  BOM CSV:  {bom_path}")
@@ -684,6 +855,7 @@ def run_batch_demonstration(design: "adsk.fusion.Design", model_refs: Dict[str, 
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(report_text)
     return report_file, report_text
+>>>>>>> origin/main
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,42 @@
 
 A production-grade Autodesk Fusion API solution that generates and parametrically controls an **Adjustable Roller Conveyor Module** satisfying all requirements from Problem Statement A (sections 2.1 – 2.6).
 
+<<<<<<< HEAD
+## Implemented Scope
+- User-driven configuration input through Fusion UI:
+  - `length_mm` (L): 800–2000
+  - `width_mm` (W): 300–600
+  - `height_mm` (H): 500–900
+  - `roller_diameter_mm` (D): 40–80
+  - `roller_spacing_mm` (P): 80–150
+  - `support_spacing_mm` (S): 500–1000
+  - `side_guard_height_mm` (G): 0–150
+  - `side_guards`: Yes/No
+- Automated generation of:
+  - frame
+  - rollers
+  - support legs
+  - optional side guards
+- Repeated component logic:
+  - roller count/positions computed from selected length, diameter, and max spacing
+  - support-leg pair count/positions computed from selected length and max spacing
+- Deterministic output:
+  - identical inputs produce identical derived layout/signature
+- Idempotent regeneration:
+  - stale generated components with `GG_` prefix are removed before rebuild
+- Automatic verification:
+  - overall dimensions and feature consistency
+  - roller/support spacing constraints and computed positions
+- BOM/component summary generated for each configuration.
+- Fusion parameter persistence:
+  - active dimensions are written to named `GG_` user parameters
+  - the generated module stores its configuration signature and BOM as Fusion attributes
+- Regeneration safety:
+  - support-leg pair centres stay inside the selected conveyor length
+  - rollers are centred across the conveyor width
+=======
 ---
+>>>>>>> origin/main
 
 ## 🌟 Key Innovations & Salient Architectural Features
 
@@ -17,9 +52,17 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
      - `LegCount = floor((ConvLength - LegSide) / LegSpacing) + 1`
    - When any parameter is changed directly in Fusion's *Modify -> Change Parameters* table or through the API, Fusion's internal constraint solver automatically recalculates component counts and locations!
 
+<<<<<<< HEAD
+## Running in Fusion
+1. Open Fusion and run `fusion_conveyor_generator.py`.
+2. Enter `L,W,H,D,P,S,G,side_guards` in the prompt.
+3. Re-run with changed values to regenerate the model and update repeated components.
+4. Inspect the `GG_ConveyorModule` attributes for the deterministic configuration signature and JSON BOM.
+=======
 3. **Parametric Rectangular Patterns (`RectangularPatternFeature`)**
    - Single master roller and master leg station patterned along the conveyor axis.
    - Pattern instance quantities and spacings are directly wired to the formula parameters (`RollerCount`, `RollerSpacing`, `LegCount`, `LegSpacing`).
+>>>>>>> origin/main
 
 4. **Zero Duplicate Geometry & In-Place Reconfiguration**
    - Parameter updates do not delete or recreate parts; geometry updates in-place via `design.computeAll()`, preserving timeline integrity and performance.
