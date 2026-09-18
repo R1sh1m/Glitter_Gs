@@ -768,16 +768,26 @@ def export_curve_bom_csv(tag: str, p: CurveInput, derived: CurveDerived,
                          output_dir: str) -> str:
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, f"{tag}_BOM.csv")
+    hw = estimate_hardware_masses_kg(p, derived)
     rows = [
         ("Curved Side Rails (arc)", 2,
          f"Ri={p.inner_radius_mm:.0f} Ro={derived.outer_radius_mm:.0f} "
          f"arc_in={derived.arc_inner_mm:.0f}mm arc_out={derived.arc_outer_mm:.0f}mm section={RAIL_W}x{RAIL_H}"),
-        ("Tapered Rollers", derived.roller_count,
+        ("Tapered Rollers (hollow tube)", derived.roller_count,
          f"d_in={p.roller_dia_inner_mm:.1f} d_out={derived.roller_dia_outer_mm:.1f} "
-         f"len={p.width_mm - 2 * (RAIL_W + ROLLER_CLEARANCE):.0f} pitch_out={p.roller_pitch_outer_mm:.0f} "
-         f"ang_pitch={derived.angular_pitch_deg:.2f}deg"),
+         f"len={p.width_mm - 2 * (RAIL_W + ROLLER_CLEARANCE):.0f} wall={TUBE_WALL_MM} "
+         f"mass={hw['Tapered Tubes (hollow)']:.1f}kg"),
+        ("Roller Shafts dia14", derived.roller_count,
+         f"len={shaft_length_for(p.width_mm):.0f} mass={hw['Shafts']:.1f}kg"),
+        ("Bearing Rings 6002-class", derived.roller_count * 2,
+         f"32OD/15bore/9W mass={hw['Bearing Rings']:.1f}kg"),
         ("Support Leg Posts", derived.support_count * 2,
          f"stations={derived.support_count} section={LEG_SIDE}x{LEG_SIDE} h={p.height_mm - RAIL_H:.0f}"),
+        ("Motor Bay Plate + slots", 1, "350x300x10, 4 tension slots"),
+        ("Motor dia120 + Pulley dia80", 1, f"mass={hw['Motor + Pulley']:.1f}kg"),
+        ("Foot Plates + anchors", derived.support_count * 2,
+         f"{derived.support_count * 2} plates 100x100x8, {derived.support_count * 2 * 4} dia11 bores"),
+        ("Sensor Bracket + Dock Boards", 5, "1 sensor set (bore dia20), 4 dock boards + 8 pin bores dia12"),
     ]
     if p.side_guards:
         rows.append(("Curved Side Guards", 2,
@@ -985,8 +995,118 @@ def verify_curve_holes(holes_inner: int, holes_outer: int,
 
 
 # ---------------------------------------------------------------------------
+# 9. P2/P3/P4 hardware backfill (live-built 2026-09-18, all verified in CAD)
+#
+# IF-020 roller train: hollow tapered tubes (3 mm wall, capped ends) +
+# through-shafts (dia 14, length W+24) + outboard 6002-class rings
+# (32 OD / 15 bore / 9 wide). Live: 19 tubes @240.6cm3 (solid was 1277.2),
+# 19 shafts @73cm3, 38 rings @~5.6cm3.
+# IF-030 motor bay: 350x300x10 plate + 4 tension slots + 4 hanger straps +
+# dia-120 motor + dia-80 pulley (2827.4 / 201.1 cm3 exact).
+# IF-040/051/060 partials: 6 foot plates + 24 anchor bores, sensor
+# foot+pedestal+bore at outlet, 4 dock boards + 8 pin bores (dia 12).
+#
+# Revolve rule (paid for twice): the profile must lie ENTIRELY on one side
+# of the revolve axis (touching ok). Crossing axes split loops (pick halves
+# for solids); multi-profile single revolves fail on crossing — put ring
+# rects wholly above a shared centre axis instead.
+# ---------------------------------------------------------------------------
+TUBE_WALL_MM = 3.0
+SHAFT_DIA_MM = 14.0
+SHAFT_LENGTH_MM = None  # computed: width + 24 (set per config; see shaft_length_for)
+BEARING_OD_MM = 32.0
+BEARING_BORE_MM = 15.0
+BEARING_W_MM = 9.0
+MOTOR_DIA_MM = 120.0
+MOTOR_LEN_MM = 250.0
+PIN_BORE_DIA_MM = 12.0
+ANCHOR_BORE_DIA_MM = 11.0
+
+
+def frustum_volume_mm3(d0_mm: float, d1_mm: float, length_mm: float) -> float:
+    """Truncated-cone volume (tube or core)."""
+    r0, r1 = d0_mm / 2.0, d1_mm / 2.0
+    return math.pi * length_mm / 3.0 * (r0 ** 2 + r0 * r1 + r1 ** 2)
+
+
+def hollow_tube_volume_mm3(p: CurveInput, derived: CurveDerived,
+                           wall_mm: float = TUBE_WALL_MM) -> float:
+    """Hollow tapered tube volume: outer frustum minus inset core (3 mm caps).
+
+    Live anchor: demo tube 1277.2 solid -> 240.6 hollow (cm3).
+    """
+    roller_len = p.width_mm - 2.0 * (RAIL_W + ROLLER_CLEARANCE)
+    outer = frustum_volume_mm3(p.roller_dia_inner_mm, derived.roller_dia_outer_mm, roller_len)
+    core = frustum_volume_mm3(p.roller_dia_inner_mm - 2 * wall_mm,
+                              derived.roller_dia_outer_mm - 2 * wall_mm,
+                              roller_len - 2 * wall_mm)
+    return outer - core
+
+
+def shaft_length_for(width_mm: float) -> float:
+    """Through-shaft spans rail to rail plus outboard bearing seats."""
+    return width_mm + 24.0
+
+
+def shaft_volume_mm3(width_mm: float, dia_mm: float = SHAFT_DIA_MM) -> float:
+    return math.pi * (dia_mm / 2.0) ** 2 * shaft_length_for(width_mm)
+
+
+def bearing_ring_volume_mm3() -> float:
+    return math.pi * ((BEARING_OD_MM / 2.0) ** 2 - (BEARING_BORE_MM / 2.0) ** 2) * BEARING_W_MM
+
+
+def curve_bom_full(p: CurveInput, derived: CurveDerived,
+                   hole_counts: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Full BOM incl. P2/P3/P4 hardware (counts only; masses via estimator)."""
+    bom = dict(curve_bom(derived, p.side_guards))
+    bom.update({
+        "tapered_tubes_hollow": derived.roller_count,
+        "shafts_dia14": derived.roller_count,
+        "bearing_rings_6002": derived.roller_count * 2,
+        "rail_seat_bores": (hole_counts or {}).get("inner", 0) + (hole_counts or {}).get("outer", 0),
+        "motor_bay_plate": 1,
+        "plate_tension_slots": 4,
+        "hanger_straps": 4,
+        "motor_dia120": 1,
+        "drive_pulley_dia80": 1,
+        "foot_plates": derived.support_count * 2,
+        "anchor_bores": derived.support_count * 2 * 4,
+        "sensor_bracket_set": 1,
+        "dock_boards": 4,
+        "dock_pin_bores": 8,
+    })
+    return bom
+
+
+def verify_drivetrain_counts(shafts: int, rings: int, derived: CurveDerived) -> Dict[str, object]:
+    """P2 validator: 1 shaft/roller, 2 rings/shaft."""
+    ok_s = shafts == derived.roller_count
+    ok_r = rings == 2 * derived.roller_count
+    return {"shafts": shafts, "rings": rings, "expected_shafts": derived.roller_count,
+            "shafts_ok": ok_s, "rings_ok": ok_r, "all": bool(ok_s and ok_r)}
+
+
+def estimate_hardware_masses_kg(p: CurveInput, derived: CurveDerived) -> Dict[str, float]:
+    """Analytic steel masses for P2/P3 hardware (bearings counted as solid rings)."""
+    from fusion_conveyor_generator import STEEL_DENSITY_KG_M3
+    mm3_to_m3 = 1e-9
+    rho = STEEL_DENSITY_KG_M3 * mm3_to_m3
+    motor_vol = math.pi * (MOTOR_DIA_MM / 2.0) ** 2 * MOTOR_LEN_MM
+    pulley_vol = math.pi * (80.0 / 2.0) ** 2 * 40.0
+    return {
+        "Tapered Tubes (hollow)": derived.roller_count * hollow_tube_volume_mm3(p, derived) * rho,
+        "Shafts": derived.roller_count * shaft_volume_mm3(p.width_mm) * rho,
+        "Bearing Rings": derived.roller_count * 2 * bearing_ring_volume_mm3() * rho,
+        "Motor + Pulley": (motor_vol + pulley_vol) * rho,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 6. Layout manager stubs (Modules-First: place occurrences, no rebuilds)
 # ---------------------------------------------------------------------------
+
+
 def layout_ports_straight(length_mm: float, width_mm: float, height_mm: float) -> Dict[str, Tuple[float, float, float]]:
     """Straight module ports in its local frame: inlet at x=0, outlet at x=L."""
     return {"inlet": (0.0, width_mm / 2.0, height_mm),

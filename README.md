@@ -128,6 +128,12 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
 - **Fusion idioms (live-proven):** trapezoid sketch → `revolveFeatures` 360° → `circularPatternFeatures` about curve-center axis; arc rails/guards as annular-sector sketches → one-sided extrudes; legs radial-patterned; guards via `isSuppressed`. Angles unit-strip with `/ 1 rad`; `pi` and `max()` are **not** available — canonical max lives in Python, Fusion carries both operands (`C_RollerCount`/`C_RollerCountMin`, read back live).
 - **Inputs:** spec-only core untouched; `calculate_load_advisory(box_mass, box_len, box_wid)` suggests P/D/S/W (P≤L/3, W=box+100) clamped to spec ranges.
 - **Deliverables:** `~/ConveyorGenerator_Output/Curve90_Ri800.step` + `Curve90_Ri800_BOM.csv` (7/7 live checks PASS, STEP gated on PASS).
+- **P1–P5 hardware (live in CAD, 105 bodies):** 36 rail seat bores dia16
+  (IF-010), hollow tubes + 19 dia14 shafts + 38 bearing rings (IF-020),
+  motor bay with tension slots + motor/pulley (IF-030/031 v0), 6 foot
+  plates + 24 anchors, sensor bracket with bore (IF-040/051), 4 dock
+  boards + 8 pin bores (IF-060 partial). Full BOM: `Curve90_Full_BOM.csv`,
+  full STEP: `Curve90_Full.step`.
 
 ## 📖 Docs (all non-code knowledge lives here — start here, not in code comments)
 

@@ -54,12 +54,23 @@ Measured 2026-09-18 from `Conveyor Assembly.stp` (3.9 MB), `Roller.stp`,
    pending first straight live build.
 2. **P2 — IF-020 roller assembly**: shaft + bearing-seat recesses; BOM gains
    shaft/bearing rows; mass model switches tube to hollow.
+   **DONE curve 2026-09-18:** hollow tapered tubes (3 mm wall, 240.6 cm3 vs
+   1277.2 solid), 19 through-shafts dia14 x 474, 38 outboard 6002-class
+   rings (32/15/9); housings deferred (rings sit against rail faces).
 3. **P3 — IF-030/031 drive option**: grooved master roller variant + motor
    plate with slots; BOM notes carry pulley/belt data.
+   **DONE curve 2026-09-18 (friction-drive v0):** 350x300x10 bay plate with
+   4 tension slots + 4 hanger straps, dia-120 motor + dia-80 pulley
+   (analytic volumes exact); belt path/grooves = P3b.
 4. **P4 — IF-040 extrusion supports + IF-051/052 accessories**: replace solid
    legs; bracket/cylinder patterns as suppressed-by-default features.
+   **DONE curve 2026-09-18 (partial):** 6 foot plates 100x100x8 + 24 dia-11
+   anchor bores (plate centres match leg stations exactly), outlet sensor
+   foot + pedestal + dia-20 bore; extrusion-post swap + stop cylinder open.
 5. **P5 — IF-060 docking**: connection boards + pin holes; layout manager
    mates them (see `VISION_PRODUCTION_LINES.md`).
+   **DONE curve 2026-09-18 (partial):** 4 end boards (one per rail end) +
+   8 dia-12 pin bores, all verified in CAD; layout mating across modules open.
 
 Rule: no new solid without its holes, no new pattern without its validator
 count, no new bought-out part without a BOM row and a standard in
@@ -84,3 +95,16 @@ count, no new bought-out part without a BOM row and a standard in
 - **Deploy-copy rule:** `conveyor_addin/fusion_conveyor_generator.py` is a
   byte-copy of the root engine (self-contained install); refresh it after
   every root edit or tests import stale code.
+- **Revolve rule:** profile must lie ENTIRELY on one side of the revolve axis
+  (touching ok). Crossing axes split loops (halves work for solids);
+  multi-profile single revolves fail on crossing — put ring rects wholly
+  above a shared centre axis. Solid motor on a through-axis: pick halves.
+- **Slot arcs:** `addByCenterStartSweep` direction is unreliable by reasoning
+  alone — plain rectangles cut reliably; verify stadium shapes by profile
+  area before cutting.
+- **xZ-sketch mapping is mirrored:** sketch (a,b) lands at world (a,-b).
+  Negate radial-z placements deliberately (proven on rails, feet, boards).
+- **Screen-up is -Y in iso captures:** legs read as rising bars; always
+  cross-check front/top + body census before declaring geometry wrong.
+- **Keep a body budget:** name-grouped counts must sum exactly (105 = 2+19+
+  6+2+19+38+1+4+1+1+6+2+4); any drift means duplication or loss.

@@ -35,3 +35,7 @@ Thumbs.db
 *.bak
 *.tmp
 *~
+
+# --- Codebase digests / dumps ---
+digest.txt
+*.digest

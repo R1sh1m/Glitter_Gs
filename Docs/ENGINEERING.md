@@ -22,8 +22,10 @@
 
 Structural constants (exposed as Fusion User Parameters, reviewer-editable):
 rail section `20×40`, roller-to-rail clearance `10`, leg post `40×40`,
-guard plate `5`. Steel `7850 kg/m³` for mass estimates (rollers modelled solid —
-documented overestimate vs hollow tube).
+guard plate `5`. Steel `7850 kg/m³` for mass estimates. Curve tubes are
+modelled **hollow** (3 mm wall, capped ends — live 240.6 vs 1277.2 cm³
+solid); straight-module rollers remain solid assumption until their live
+build (documented overestimate vs hollow tube).
 
 - **End margin:** `RollerMargin = D/2 + 10`. First/last roller centres sit one
   margin inside each frame end.
