@@ -1,0 +1,3 @@
+[submodule "FusionMCPSample"]
+	path = FusionMCPSample
+	url = https://github.com/AutodeskFusion360/FusionMCPSample.git
