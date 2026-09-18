@@ -30,3 +30,11 @@ output/
 *.stp
 *_BOM.csv
 *_REPORT.txt
+
+# --- OS and Editor Temp files ---
+.pytest_cache/
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*~

@@ -297,3 +297,10 @@ sample with attribution, don't relicense.
 | 2026-09-18 | A | Measured-vs-estimated mass BOM column; `clean_for_export()` hygiene gate (EmptySketchFinder predicate + AutoDeleteEmptySketch guards) | §15 ranks 1–2 | unit + mock tests |
 | 2026-09-18 | B | `conveyor_addin/` dialog (typed inputs, live preview, Export button + log, model reuse) on the AddInSample skeleton | §15 ranks 3–4 | 5 offline helper tests; live Fusion run pending |
 | 2026-09-18 | C | Same-viewpoint snapshots + `snapshots.csv`/`comparer.html`; per-config browser labels; best-effort guard-face etch | §15 ranks 7, 14 | writer/helper tests; capture+etch need live Fusion |
+| 2026-09-18 | D/curve | `fusion_curve_module.py`: tapered revolve + circular pattern, `C_*` params (`/1 rad` idiom, no `pi`/`max()`), rail-to-rail ends, advisory, layout ports; 90°/Ri800 build 7/7 live PASS + STEP | Docs/ENGINEERING.md §3, Docs/standards/ | 6 curve unit tests + live validation |
+
+## 17. Docs map (non-code knowledge — refer here, not code comments)
+
+- `ENGINEERING.md` — sizing/taper/advisory source of truth · `INTEGRATION.md` — IF-010…IF-060 gates
+- `STANDARDS.md` — normative index · `VISION_PRODUCTION_LINES.md` — interlockable roadmap
+- `reference models/` — measured teardown · `standards/` — committed sources

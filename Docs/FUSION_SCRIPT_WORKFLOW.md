@@ -241,3 +241,7 @@ function in §§3–8, so nothing here is thrown away.
 - **UI param edit does nothing** → that input arrived via `createByReal` or a sketch dimension lacks its expression — search for the parameter name.
 - **Stale numbers** → a read happened before `computeAll()`.
 - **`adsk` import errors in VS Code** → expected: develop pure-Python locally, run CAD in Fusion (or its Edit-bridge VS Code). No stubs are vendored by policy.
+
+> Non-code knowledge (sizing, integration gates, standards, vision) lives in
+> `ENGINEERING.md`, `INTEGRATION.md`, `STANDARDS.md`,
+> `VISION_PRODUCTION_LINES.md` — refer there, not to code comments.
