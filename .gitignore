@@ -1,0 +1,14 @@
+# --- LSP local configs (machine-specific, do not commit) ---
+pyrightconfig.json
+.pyrightconfig.json
+.vscode/settings.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- Generated run artifacts (STEP / BOM / reports) ---
+out/
+output/
