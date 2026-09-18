@@ -1,62 +1,71 @@
 # Glitter_Gs
 
-Fusion API implementation for a **parametric multi-type gear pair generator**.
+Fusion API implementation for a **parametric adjustable roller conveyor configuration generator**.
 
 ## Implemented Scope
-- Gear types: **external spur** and **external helical**
-- Inputs:
-  - `gear_type`: spur/helical
-  - `mn` (normal module): 1.5–3 mm
-  - `z1`: 18–40
-  - `z2`: 30–80
-  - `pressure_angle_deg`: fixed at 20°
-  - `face_width`: 6–15 mm
-  - `helix_angle_deg`: 0–30° (must be 0 for spur)
-- Automatic verification:
-  - tooth-count bounds
-  - ratio `i = z2/z1`
-  - pitch diameters
-  - center distance
-  - pressure/helix consistency
+- User-driven configuration input through Fusion UI:
+  - `length_mm` (L): 800–2000
+  - `width_mm` (W): 300–600
+  - `height_mm` (H): 500–900
+  - `roller_diameter_mm` (D): 40–80
+  - `roller_spacing_mm` (P): 80–150
+  - `support_spacing_mm` (S): 500–1000
+  - `side_guard_height_mm` (G): 0–150
+  - `side_guards`: Yes/No
+- Automated generation of:
+  - frame
+  - rollers
+  - support legs
+  - optional side guards
+- Repeated component logic:
+  - roller count/positions computed from selected length, diameter, and max spacing
+  - support-leg pair count/positions computed from selected length and max spacing
+- Deterministic output:
+  - identical inputs produce identical derived layout/signature
 - Idempotent regeneration:
-  - stale generated components/joints with `GG_` prefix are removed before rebuild.
-
-## Gear Equations / Convention
-This project uses a **normal-module convention** for both spur and helical gears.
-
-- Transverse module: `mt = mn / cos(beta)`
-- Pitch diameters: `d1 = mt * z1`, `d2 = mt * z2`
-- Transmission ratio: `i = z2 / z1`
-- Center distance: `a = (d1 + d2)/2`
-
-For spur gears, `beta = 0`, so `mt = mn` and the pitch diameter reduces to `d = m*z`.
+  - stale generated components with `GG_` prefix are removed before rebuild
+- Automatic verification:
+  - overall dimensions and feature consistency
+  - roller/support spacing constraints and computed positions
+- BOM/component summary generated for each configuration.
 
 ## Files
-- `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_gear_generator.py`
-  - input validation
-  - gear mathematics
-  - automatic verification
-  - Fusion geometry generation (spur + helical)
-  - assembly positioning and motion-link attempt
-- `/home/runner/work/Glitter_Gs/Glitter_Gs/tests/test_gear_math.py`
-  - focused checks for:
-    - configuration A (spur 2:1)
-    - configuration B (helical 3:1)
-    - additional unseen parameter set
+- `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_conveyor_generator.py`
+  - input validation and conflict rejection
+  - conveyor parameter derivation
+  - verification checks
+  - deterministic configuration signature
+  - BOM builder
+  - Fusion geometry generation
+  - three demonstration configurations
+- `/home/runner/work/Glitter_Gs/Glitter_Gs/tests/test_conveyor_generator.py`
+  - valid configuration checks
+  - invalid/conflicting input rejection
+  - repeated-component parameter dependence
+  - deterministic signature checks
+  - three-configuration generation verification
+  - BOM checks
 
-## Required Example Configurations
-- **A – Spur pair**: `m=2`, `z1=20`, `z2=40`, `PA=20°`, `b=10`
-  - ratio 2:1, `d1=40 mm`, `d2=80 mm`, `a=60 mm`
-- **B – Helical pair**: `m=2`, `z1=20`, `z2=60`, `PA=20°`, `b=12`, `beta=20°`
-  - ratio 3:1 with dimensions from the normal-module convention above
+## Three Demonstration Configurations
+- `C1_compact_no_guards`
+- `C2_medium_with_guards`
+- `C3_long_with_guards`
+
+All three are valid and substantially different in dimensions/features.
 
 ## Running in Fusion
-1. Open Fusion and run `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_gear_generator.py`.
-2. In `run(context)`, choose either demo configuration or replace with your own `GearInput`.
-3. Re-run with new parameters to regenerate without stale duplicate generated items.
+1. Open Fusion and run `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_conveyor_generator.py`.
+2. Enter `L,W,H,D,P,S,G,side_guards` in the prompt.
+3. Re-run with changed values to regenerate the model and update repeated components.
 
 ## Local Verification (outside Fusion)
 ```bash
 cd /home/runner/work/Glitter_Gs/Glitter_Gs
-python -m unittest -v
+python -m unittest discover -s tests -v
 ```
+
+## Technical Notes / Assumptions
+- Roller center positions include edge offsets of `D/2` from both ends.
+- Support-leg pairs span from `x=0` to `x=L`.
+- Computed spacing is always less than or equal to selected maximum spacing.
+- When `side_guards=False`, `side_guard_height_mm` must be `0`.
