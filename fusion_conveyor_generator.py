@@ -172,6 +172,17 @@ def _compute_repeated_positions(total_length_mm: float, max_spacing_mm: float, e
 
 
 def validate_inputs(params: ConveyorInput) -> None:
+    values = (
+        params.length_mm,
+        params.width_mm,
+        params.height_mm,
+        params.roller_diameter_mm,
+        params.roller_spacing_mm,
+        params.support_spacing_mm,
+        params.side_guard_height_mm,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("All numeric inputs must be finite.")
     if not (RANGES["L"][0] <= params.length_mm <= RANGES["L"][1]):
         raise ValueError(f"length_mm must be within {RANGES['L'][0]}-{RANGES['L'][1]} mm.")
     if not (RANGES["W"][0] <= params.width_mm <= RANGES["W"][1]):
