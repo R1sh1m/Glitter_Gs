@@ -59,7 +59,7 @@ Authoritative names — do not rename without updating every reference:
 | `RailW`, `RailH`, `LegSide`, `RollerClearance`, `GuardThick` | constants | engineering choices, still params (reviewers check the dialog) |
 | `RollerMargin` | derived | `RollerDia / 2 + 10 mm` (end offset to first/last roller centre) |
 | `RollerCount` | **formula** | `floor((ConvLength - 2 * RollerMargin) / RollerSpacing) + 1` |
-| `LegCount` | **formula** | Brief: `floor(ConvLength / LegSpacing) + 1` (code currently `floor((ConvLength - LegSide)/LegSpacing)+1` — open divergence, see §9) |
+| `LegCount` | **formula** | `floor((ConvLength - LegSide) / LegSpacing) + 1` — intentional refinement of Brief's `floor(ConvLength / LegSpacing) + 1` so the last 40 mm post stays inside the envelope (see `leg_count_for()` docstring; single-sourced 2026-09-18) |
 
 API pattern (two-step — `add()` alone won't reliably accept cross-param formulas):
 
@@ -131,10 +131,10 @@ rail_plane = planes.add(inp)
 - Roller sketch plane: offset XZ by `RailW + RollerClearance`.
 - Pattern direction: `comp.xConstructionAxis` (length = X per Brief §3.3).
 
-## 8. Extrudes — retired API warning
+## 8. Extrudes — retired API migrated (2026-09-18)
 
-> Repo currently calls `extrudes.createInput(...).setDistanceExtent(...)`.
-> `setDistanceExtent` / `setAllExtent` are **RETIRED**. Migrate to:
+> Repo previously called `extrudes.createInput(...).setDistanceExtent(...)`.
+> `setDistanceExtent` / `setAllExtent` are **RETIRED** and now migrated to:
 
 ```python
 extrudes = comp.features.extrudeFeatures
@@ -144,6 +144,10 @@ extent = adsk.fusion.DistanceExtentDefinition.create(
 inp.setOneSideExtent(extent, adsk.fusion.ExtentDirections.PositiveExtentDirection)
 feat = extrudes.add(inp)
 ```
+
+Central helper `_extrude_profiles_one_side()` wraps this with a legacy
+fallback for very old builds. Extrude distances: `RailH`,
+`ConvWidth - 2*(RailW + RollerClearance)`, `FrameHeight - RailH`, `GuardHeight`.
 
 or for trivial cases `extrudes.addSimple(profile, distanceValueInput, operation)`.
 Extrude distances in this model: `RailH`, `ConvWidth - 2*(RailW + RollerClearance)`,
@@ -210,25 +214,38 @@ design.exportManager.execute(opts)
 | Zero/extrude fail at `G=0` | `GuardHeight` floor at 1 mm + suppression (don't extrude 0) |
 | Stale validation numbers | Missing `design.computeAll()` before reads |
 | Duplicates after re-run | Feature tree rebuilt per config; fix = edit params in place, clean `ParametricConveyor*` occurrences once at build |
-| `adsk` import errors in editor | Expected outside Fusion — `try/except ImportError` + LSP `reportMissingImports=false` (local config, gitignored) |
-| `setDistanceExtent` exception | Retired API — migrate to `setOneSideExtent` + `DistanceExtentDefinition` |
+| `adsk` import errors in editor | Expected outside Fusion — `try/except ImportError` + `reportMissingImports=false` (local config, gitignored). No stubs vendored by policy; `adsk.*` intelligence comes from Fusion's Edit bridge, pure-Python keeps full LSP |
+| `setDistanceExtent` exception | Retired API — migrated 2026-09-18 to `setOneSideExtent` + `DistanceExtentDefinition` (`_extrude_profiles_one_side`, legacy fallback retained) |
 
 ## 13. Repo code-map (where brief requirements live)
 
 - Ranges + `validate_inputs` → `fusion_conveyor_generator.py` §1 (`RANGES`, `ConveyorInput`).
-  Known divergence: rejects `side_guards=False + G>0`, but Brief §7 edge case requires
-  allowing it (suppression independent of height) — fix pending.
+  Status 2026-09-18: FIXED — `side_guards=False + G>0` is now accepted
+  (suppression independent of height, Brief §7 edge case).
 - Pure-Python derive/verify/signature/BOM (offline-testable) → §2
   (`derive_configuration`, `verify_configuration`, `deterministic_signature`, `build_bom`).
-  Known divergence: `_compute_repeated_positions` uses `ceil`-redistribution while Fusion
-  formulas + `validate_cad_model` use `floor`-pitch — counts can disagree; unify on brief formulas.
+  Status 2026-09-18: FIXED — floor-pitch unified via `roller_count_for()` /
+  `leg_count_for()` / `_compute_floor_positions()`; Python, Fusion formulas,
+  validator and BOM share one implementation. `build_bom_from_model()` reads
+  counts back from Fusion when available; phantom `frame_cross_members` removed.
 - Param create/update → §3 (`create_user_parameters`, `update_model_parameters`).
+  Status 2026-09-18: `update_model_parameters` validates before touching live
+  params, single `computeAll()`, `is not None` suppression guard.
 - One-time parametric tree (rails → master roller + pattern → master legs + pattern →
   guards) → §4 (`build_parametric_conveyor_model`). Reconfig never rebuilds.
+  Status 2026-09-18: extrudes migrated, Identical pattern compute, sketch
+  handles retained + profile-count asserts, timeline undo grouping, safe
+  occurrence cleanup.
 - CAD validation (bbox×10, formula recompute) + STEP/BOM/report → §5
   (`validate_cad_model`, `export_bom_csv`, `export_step_file`, `run_batch_demonstration`).
+  Status 2026-09-18: validator self-computes, `round()` counts, height uses
+  `max(roller-top, guard-top)`, suppression readback, STEP gated on PASS,
+  BOM prefers model counts, Configurations-table sync attempted with
+  sequential fallback.
 - UI entry `run(context)` → §6 (mode 1 batch / mode 2 CSV `L,W,H,D,P,S,G,Yes/No`).
-- Tests → `tests/test_conveyor_generator.py`. Baseline 2026-09-18: 8/8 pass
+  Status 2026-09-18: Parametric-design gate, timeline-rollback cleanup on
+  build failure, custom path gated the same as batch.
+- Tests → `tests/test_conveyor_generator.py`. Baseline 2026-09-18: 11/11 pass
   (`unittest discover -s tests`). Demo keys are `C1/C2/C3`-style
   (`C2_medium_with_guards`, etc.) and aligned between code and tests.
 - `README.md` was refreshed in the working tree (config names, run flow) — keep it
@@ -239,3 +256,44 @@ design.exportManager.execute(opts)
 Param edit regenerates with zero manual steps · validation logged, not eyeballed ·
 no orphans after 3+ reconfigs · BOM matches model · STEP opens · assumptions written down
 (rail section, roller clearance, min-leg-count rule, guard floor/suppression).
+
+## 15. GitHub reuse catalog (`AutodeskFusion360` org, 34 repos)
+
+Policy: **reference-only** — idioms are re-implemented by hand in our script;
+no third-party files are vendored (keeps licensing trivial and the single-file
+script deployable via Scripts and Add-Ins). Licenses below are per-repo as
+published; `FusionAPIReference` (CC BY-NC-SA) is local-lookup only, never bundled.
+
+| Rank | Repo | License | Reuse in this project |
+|---|---|---|---|
+| 1 | `ExtractBOM` | MIT | `walkThrough` loop shape (`allOccurrences` → dedupe → sum `body.volume`) → mass/volume BOM columns. Volume is cm³ — convert. |
+| 2 | `EmptySketchFinder` | MIT | `find_empty_sketches()` predicate → `clean_for_export()` pre-STEP gate; fix its `-1` hack, add `sketchDimensions`/`sketchTexts` guard from `AutoDeleteEmptySketch`. Keep confirm/log, never silent-delete. |
+| 3 | `BulkExportSketchesAsDXF` | MIT | Stay-open export dialog (`isOKButtonVisible=False`, Export button, `status_log` + `doEvents()`, `_update_preview` on `inputChanged`) → conveyor Export/Params dialog (Wave B). Its DXF-options API is preview — STEP stays primary. |
+| 4 | `AddInSample` | MIT | Script→Add-in conversion skeleton (`run`/`stop`, `handlers=[]` anti-GC, `addButtonDefinition`, `commandCreated→commandInputs→execute`). Modernize `toolbarPanels.item(0)` → `workspaces/itemById`. |
+| 5 | `Bolt` | MIT | Best parametric template: `ValueInput` + `executePreview` live update, chamfer/fillet, `threadFeatures` for leveling feet (guard `recommendData` — needs network). |
+| 6 | `SpurGear` | MIT-stated | `evaluateExpression(...,cm/deg)` + `addNewComponent(Matrix3D)` + pattern structure. Skip involute math — we need cylinders/boxes. |
+| 7 | `ChangeComparer_Python` | sample* | Same-viewpoint C1/C2/C3 snapshots (`restoreCamera` → `saveAsImageFile` → compare page). Verify `InspectPanel` ID on current Fusion. *No LICENSE file — attribute, don't redistribute standalone. |
+| 8 | `ParameterIO_Python` | MIT-stated | CSV↔params retry ordering (dependency-safe expression sets) → `variants.csv` driven configs. |
+| 9 | `SketchRepair` / `SketchChecker_Python` | MIT | `find_gaps`/`getLoopEndPoints` pre-extrude gates; Fix-All coincident repair. |
+| 10 | `DXFBulkImport` | MIT | `close_sketch_gaps` + `profiles.count==0` gate; `entry.py` input-enable/validation discipline. Strip `ezdxf`/`fusionAddInUtils` deps. |
+| 11 | `Fusion360DevTools` | MIT | cProfile perf capture + API Object Explorer for live signature discovery. Note Py3.14 `sys.monitoring` slot fix. |
+| 12 | `FusionMCPSample` | MIT | Thread-safe `execute_api_script` + `get_screenshot` agent loop. Never call Fusion API from the HTTP thread (marshal via custom event). |
+| 13 | `Pipe` / `Bottle` | MIT-stated | Sweep rollers / revolve+shell end-caps; curved-rail stretch only. |
+| 14 | `SurfaceText_python` | MIT-stated | Etch config name on frame (`sketchTexts` + 0.5 mm Cut); 2015 code + bundled FontTools — test early. |
+| 15 | `ImportSplineCSV` / `DXFSplineToPolyline_Python` | MIT-stated/sample | CSV→params drive; `evaluator.getStrokes(tol)` fidelity note. Guard `SketchControlPointSpline` on version. |
+| 16 | `DeleteEmptyComponents` | MIT | Assembly purge pre-export. Destructive — confirm via dialog. |
+| — | `Intersections` | MIT-stated | Do NOT use for solid clash (plane/curve math only); occurrence-walk pattern only. Real clash: `analyzeInterference()` / `boundingBox.intersects()`. |
+| — | `NativeUI` | MIT | Skip — C++/Windows-only, no benefit for Python. |
+| — | `DesignAutomationSamples`, `EntitlementAPI`, `HttpSample` | MIT | Out of scope: APS auth/credits, store licensing, network-in-judging risk. |
+
+"MIT-stated" = README claims MIT but no `LICENSE` file in repo; treat as reusable
+sample with attribution, don't relicense.
+
+## 16. Integration log
+
+| Date | Wave | What was integrated (as re-implemented idiom) | Source | Verified by |
+|---|---|---|---|---|
+| 2026-09-18 | P0/P1 core | `setOneSideExtent` migration, floor-pitch counts, model-read BOM, guard independence, sketch hardening, undo groups, export-on-PASS | §§8–13 above | 17/17 offline tests |
+| 2026-09-18 | A | Measured-vs-estimated mass BOM column; `clean_for_export()` hygiene gate (EmptySketchFinder predicate + AutoDeleteEmptySketch guards) | §15 ranks 1–2 | unit + mock tests |
+| 2026-09-18 | B | `conveyor_addin/` dialog (typed inputs, live preview, Export button + log, model reuse) on the AddInSample skeleton | §15 ranks 3–4 | 5 offline helper tests; live Fusion run pending |
+| 2026-09-18 | C | Same-viewpoint snapshots + `snapshots.csv`/`comparer.html`; per-config browser labels; best-effort guard-face etch | §15 ranks 7, 14 | writer/helper tests; capture+etch need live Fusion |

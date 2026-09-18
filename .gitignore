@@ -6,9 +6,27 @@ pyrightconfig.json
 # --- Python ---
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 .venv/
 venv/
+*.log
+
+# --- Local AI & Agent Personal Configurations (never commit) ---
+.agents/
+.agent/
+_agents/
+_agent/
+.gemini/
+opencode.json
+opencode.jsonc
+.opencode/
+scratch/
 
 # --- Generated run artifacts (STEP / BOM / reports) ---
 out/
 output/
+*.step
+*.stp
+*_BOM.csv
+*_REPORT.txt
