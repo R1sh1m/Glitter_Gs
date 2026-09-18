@@ -71,6 +71,15 @@ Measured 2026-09-18 from `Conveyor Assembly.stp` (3.9 MB), `Roller.stp`,
    mates them (see `VISION_PRODUCTION_LINES.md`).
    **DONE curve 2026-09-18 (partial):** 4 end boards (one per rail end) +
    8 dia-12 pin bores, all verified in CAD; layout mating across modules open.
+- **P3b closeout 2026-09-18:** friction belt band (annulus Rc±15, 5 mm at
+  y=711, top kissing tube bottoms); return run + tensioner stay P3c.
+- **IF-020 closeout 2026-09-18:** 40x40x12 boss housings outboard of each
+  rail with dia-15 through-bores on the shaft line (bored pre-pattern so
+  all 38 carry bores); shafts lengthened W+24 → **W+48** (474 → 498) after
+  measuring a 1 mm engagement miss — bores, shafts, rings now concentric
+  by construction.
+   **DONE curve 2026-09-18 (partial):** 4 end boards (one per rail end) +
+   8 dia-12 pin bores, all verified in CAD; layout mating across modules open.
 
 Rule: no new solid without its holes, no new pattern without its validator
 count, no new bought-out part without a BOM row and a standard in
@@ -92,9 +101,12 @@ count, no new bought-out part without a BOM row and a standard in
   hit the wrong features, and combined delete transactions hang the solver.
 - **Prints vanish on failure:** split probe/build/verify into small runs so
   every success leaves a readable trail.
-- **Deploy-copy rule:** `conveyor_addin/fusion_conveyor_generator.py` is a
-  byte-copy of the root engine (self-contained install); refresh it after
-  every root edit or tests import stale code.
+- **Deploy-copy rule:** `conveyor_addin/` ships byte-copies of the root
+  engines (`fusion_conveyor_generator.py`, `fusion_curve_module.py`,
+  `fusion_docking_system.py`); refresh them after every root edit or tests
+  import stale code. Enforced by `tests/test_deploy_sync.py` (sha256 guard —
+  drift fails loudly with the fix command). Also clear `__pycache__` when
+  tracebacks disagree with file contents (stale bytecode mimics real bugs).
 - **Revolve rule:** profile must lie ENTIRELY on one side of the revolve axis
   (touching ok). Crossing axes split loops (halves work for solids);
   multi-profile single revolves fail on crossing — put ring rects wholly
@@ -106,5 +118,15 @@ count, no new bought-out part without a BOM row and a standard in
   Negate radial-z placements deliberately (proven on rails, feet, boards).
 - **Screen-up is -Y in iso captures:** legs read as rising bars; always
   cross-check front/top + body census before declaring geometry wrong.
+- **`evaluateExpression` returns requested units — never convert after it:**
+  a second `convert()` multiplied lengths x10 and angles x57.3, failing all
+  validation (live symptom: "must be within ..." on valid inputs).
 - **Keep a body budget:** name-grouped counts must sum exactly (105 = 2+19+
   6+2+19+38+1+4+1+1+6+2+4); any drift means duplication or loss.
+- **Never trust `rect.item()` order:** measure edges, dimension the measured
+  long/short edges, anchor the near corner to the sketch origin (else the
+  solver drags the wrong side — observed 149 mm rails, −130 origins).
+- **Pin rectangular patterns to one direction** (`quantityTwo = 1`);
+  unset direction-two quantities multiply instances (observed 39×13).
+- **Straight builds Z-up, curve builds Y-up:** validators must detect axes
+  by matching extents, never by position.

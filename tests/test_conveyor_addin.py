@@ -42,6 +42,129 @@ class ConveyorAddinHelperTests(unittest.TestCase):
     def test_addin_module_imports_without_fusion(self):
         self.assertFalse(addin._HAS_ADSK)
         self.assertEqual(addin.ADDIN_ID, "GlitterGsConveyorAddin")
+        self.assertEqual(addin.DOCK_CMD_ID, "GlitterGsDockingTool")
+
+    def test_presets_loaded_and_valid(self):
+        presets = addin.load_presets()
+        self.assertIn("C1: Compact (No Guards)", presets)
+        self.assertIn("C2: Medium Standard (With Guards)", presets)
+        self.assertIn("C3: Long Heavy (With Guards)", presets)
+        self.assertIn("Curve 90° Standard Ri800", presets)
+
+        c2 = presets["C2: Medium Standard (With Guards)"]
+        self.assertEqual(c2["in_length"], 1400.0)
+        self.assertEqual(c2["in_width"], 450.0)
+
+    def test_curve_input_and_preview(self):
+        defaults = addin.dialog_defaults()
+        defaults["in_radius"] = 800.0
+        defaults["in_angle"] = 90.0
+        curve_p = addin.values_to_curve_input(defaults)
+        self.assertEqual(curve_p.inner_radius_mm, 800.0)
+        self.assertEqual(curve_p.curve_angle_deg, 90.0)
+
+        prev = addin.preview_curve_text(curve_p)
+        self.assertIn("[CURVED MODULE]", prev)
+        self.assertIn("Rollers:", prev)
+        self.assertIn("Tapered", prev)
+
+    def test_dialog_read_applies_no_double_conversion(self):
+        """evaluateExpression already returns requested units (regression).
+
+        A second convert() multiplied lengths x10 (1400 -> 14000, rejected)
+        and angles x57.3 (90 -> 5156 deg, rejected). Faked units manager
+        follows real Fusion semantics.
+        """
+        import re
+
+        real_adsk = addin.adsk
+
+        class FakeUnits:
+            @staticmethod
+            def _split(expr):
+                m = re.match(r"\s*([0-9.]+)\s*([A-Za-z]*)\s*$", expr)
+                return float(m.group(1)), (m.group(2) or "mm")
+
+            def evaluateExpression(self, expr, unit):
+                val, frm = self._split(expr)
+                to_mm = {"mm": 1.0, "cm": 10.0}
+                to_deg = {"deg": 1.0, "rad": 57.29578}
+                if unit in ("mm", "cm"):
+                    return val * to_mm.get(frm, 1.0) / to_mm[unit]
+                return val * to_deg.get(frm, 1.0) / to_deg[unit]
+
+            def convert(self, v, frm, to):
+                return v * 10.0  # hostile: proves we never call it
+
+        class FakeProduct:
+            unitsManager = FakeUnits()
+
+        class FakeApp:
+            activeProduct = FakeProduct()
+
+            @staticmethod
+            def get():
+                return FakeApp()
+
+        class FakeCore:
+            Application = FakeApp
+
+        class FakeAdsk:
+            core = FakeCore()
+
+        class Item:
+            def __init__(self, expression="", value=None, selected=None):
+                self.expression = expression
+                self.value = value
+                self.selectedItem = (
+                    type("S", (), {"name": selected})() if selected else None
+                )
+
+        table = {
+            addin.MODULE_TYPE_ID: Item(selected="Straight Section"),
+            addin.PRESET_ID: Item(selected="Custom"),
+            addin.GUARDS_ID: Item(value=True),
+            "in_length": Item(expression="1400 mm"),
+            "in_width": Item(expression="450 mm"),
+            "in_height": Item(expression="750 mm"),
+            "in_dia": Item(expression="60 mm"),
+            "in_pitch": Item(expression="110 mm"),
+            "in_leg": Item(expression="700 mm"),
+            "in_guard": Item(expression="100 mm"),
+            "in_radius": Item(expression="800 mm"),
+            "in_angle": Item(expression="90 deg"),
+        }
+
+        class FakeInputs:
+            def itemById(self, i):
+                return table.get(i)
+
+        addin.adsk = FakeAdsk()
+        try:
+            values = addin._read_dialog_values(FakeInputs())
+        finally:
+            addin.adsk = real_adsk
+        self.assertEqual(values["in_length"], 1400.0)
+        self.assertEqual(values["in_width"], 450.0)
+        self.assertEqual(values["in_angle"], 90.0)
+        self.assertEqual(values["in_radius"], 800.0)
+        # And the values validate end to end
+        addin.values_to_input(values)
+        addin.values_to_curve_input(values)
+
+    def test_preview_text_contains_capacity_and_safety_factor(self):
+        params = addin.values_to_input(addin.dialog_defaults())
+        text = addin.preview_text(params)
+        self.assertIn("Rated Safe Load:", text)
+        self.assertIn("Structural Safety Factor", text)
+        self.assertIn("Cross-Struts:", text)
+
+    def test_duty_presets_contain_capacity_and_cross_brace(self):
+        presets = addin.load_presets()
+        for p in presets.values():
+            if p.get("module_type") == "straight":
+                self.assertIn("in_cross_brace", p)
+                self.assertIn("in_target_load", p)
 
 
 if __name__ == "__main__":

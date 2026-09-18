@@ -654,6 +654,32 @@ class AutodeskFusionApiIntegrationTests(unittest.TestCase):
             self.assertNotIn("[FAIL]", content)
             self.assertIn("[PASS]", content)
 
+    def test_build_falls_back_to_root_in_part_docs(self):
+        """Part-design docs (addNewComponent raises) build the same tree in root."""
+        demo = self.fcg.demo_configurations()["C2_medium_with_guards"]
+        self.fcg.create_user_parameters(self.design, demo)
+
+        real_occs = self.design.rootComponent.occurrences
+
+        class FailingOccurrences:
+            def __iter__(self):
+                return iter([])
+
+            def addNewComponent(self, _matrix):
+                raise RuntimeError("Part Design documents can only contain one component")
+
+        self.design.rootComponent.occurrences = FailingOccurrences()
+        try:
+            refs = self.fcg.build_parametric_conveyor_model(self.design)
+        finally:
+            self.design.rootComponent.occurrences = real_occs
+
+        self.assertIsNone(refs["occurrence"])
+        self.assertIs(refs["component"], self.design.rootComponent)
+        self.assertEqual(len(refs["component"].sketches.sketches), 4)
+        self.assertEqual(len(refs["component"].features.extrudeFeatures.features), 4)
+        self.assertEqual(len(refs["component"].features.rectangularPatternFeatures.patterns), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

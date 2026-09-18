@@ -333,6 +333,176 @@ class StraightHoleTests(unittest.TestCase):
         self.assertTrue(verify_straight_holes(n - 2, n, derived)["all"])
         self.assertFalse(verify_straight_holes(n - 3, n, derived)["all"])
 
+    def test_subset_helpers(self):
+        from fusion_conveyor_generator import (
+            subset_extents_mm,
+            validate_straight_subset,
+            derive_configuration,
+            demo_configurations,
+        )
+        self.assertIsNone(subset_extents_mm([]))
+        boxes = [((0.0, 0.0, 0.0), (140.0, 85.0, 45.0))]
+        ext = subset_extents_mm(boxes)
+        self.assertIsNotNone(ext)
+        assert ext is not None
+        self.assertEqual(ext[0], (0.0, 0.0, 0.0))
+        self.assertEqual(ext[1], (1400.0, 850.0, 450.0))
+        cfg = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(cfg)
+        checks = validate_straight_subset(cfg, derived, ext)
+        self.assertTrue(checks["all"])
+        bad = validate_straight_subset(cfg, derived, None)
+        self.assertFalse(bad["all"])
+
+    def test_rect_measured_edges_and_single_direction(self):
+        from types import SimpleNamespace as NS
+        from fusion_conveyor_generator import _rect_long_short, _single_pattern_direction
+
+        def pt(x, y):
+            return NS(x=x, y=y, z=0.0)
+
+        def ln(a, b):
+            return NS(startSketchPoint=NS(geometry=a), endSketchPoint=NS(geometry=b))
+
+        # Long edge along X regardless of item order (reversed input order)
+        lines = [ln(pt(10, 32), pt(0, 32)), ln(pt(0, 32), pt(0, 30)),
+                 ln(pt(0, 30), pt(10, 30)), ln(pt(10, 30), pt(10, 32))]
+        coll = NS(count=4, item=lambda i: lines[i])
+        long_e, short_e = _rect_long_short(coll)
+        la = long_e.startSketchPoint.geometry
+        lb = long_e.endSketchPoint.geometry
+        self.assertAlmostEqual(abs(lb.x - la.x) + abs(lb.y - la.y), 10.0)
+        sa = short_e.startSketchPoint.geometry
+        sb = short_e.endSketchPoint.geometry
+        self.assertAlmostEqual(abs(sb.x - sa.x) + abs(sb.y - sa.y), 2.0)
+
+        # Single-direction pinning never raises, sets when supported
+        _single_pattern_direction(object())
+        import fusion_conveyor_generator as fcg_mod
+        real_adsk = fcg_mod.adsk
+        marker = object()
+
+        class FakeVI:
+            @staticmethod
+            def createByReal(v):
+                return ("real", v, marker)
+
+            @staticmethod
+            def createByString(s):
+                return ("str", s, marker)
+
+        class FakeCore:
+            ValueInput = FakeVI
+
+        class FakeAdsk:
+            core = FakeCore()
+
+        fcg_mod.adsk = FakeAdsk()
+        try:
+            holder = {}
+            from types import SimpleNamespace as NS2
+            holder = NS2(quantityTwo=None, distanceTwo=None, isSymmetricInDirectionTwo=True)
+            _single_pattern_direction(holder)
+            self.assertEqual(holder.quantityTwo[0], "real")
+            self.assertEqual(holder.distanceTwo[0], "str")
+            self.assertFalse(holder.isSymmetricInDirectionTwo)
+        finally:
+            fcg_mod.adsk = real_adsk
+
+    def test_frame_proof_validator_detects_axes(self):
+        from fusion_conveyor_generator import (
+            derive_configuration,
+            demo_configurations,
+            validate_straight_subset,
+        )
+        cfg = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(cfg)
+        # Z-up layout (length X, height Z) as built live
+        checks = validate_straight_subset(cfg, derived, ((0.0, 0.0, 0.0), (1400.0, 450.0, 850.0)))
+        self.assertTrue(checks["all"])
+        self.assertEqual(checks["axes"]["height"], "z")
+        # Y-up layout maps the same way
+        checks2 = validate_straight_subset(cfg, derived, ((0.0, 0.0, 0.0), (1400.0, 850.0, 450.0)))
+        self.assertTrue(checks2["all"])
+        self.assertEqual(checks2["axes"]["height"], "y")
+
+    def test_conveyor_capacity_calculation(self):
+        from fusion_conveyor_generator import (
+            ConveyorInput,
+            derive_configuration,
+            calculate_conveyor_capacity,
+        )
+        c2 = ConveyorInput(1400.0, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True, cross_bracing=True)
+        derived = derive_configuration(c2)
+        self.assertIsNotNone(derived.capacity)
+        cap = derived.capacity
+        self.assertGreater(cap.rated_total_capacity_kg, 100.0)
+        self.assertGreater(cap.roller_capacity_kg, 40.0)
+        self.assertGreater(cap.max_unit_package_kg, 100.0)
+        self.assertGreaterEqual(cap.structural_safety_factor, 1.2)
+        self.assertIn(cap.limiting_component, ("Rollers", "Side Rails", "Leg Supports"))
+
+        # Cross-bracing improves leg capacity
+        unbraced = ConveyorInput(1400.0, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True, cross_bracing=False)
+        cap_unbraced = calculate_conveyor_capacity(unbraced, derive_configuration(unbraced))
+        self.assertGreater(cap.total_support_capacity_kg, cap_unbraced.total_support_capacity_kg)
+
+    def test_autonomous_optimization_engine(self):
+        from fusion_conveyor_generator import (
+            autonomous_optimize_conveyor,
+            derive_configuration,
+            validate_inputs,
+        )
+        # Light duty: small rollers, unbraced low frame
+        light = autonomous_optimize_conveyor(150.0, 1000.0, 400.0, 600.0, side_guards=True, duty_class="light")
+        validate_inputs(light)
+        self.assertEqual(light.roller_diameter_mm, 40.0)
+        self.assertFalse(light.cross_bracing)
+
+        # Pallet heavy duty: large rollers, tight pitch, cross-braced
+        heavy = autonomous_optimize_conveyor(1800.0, 2000.0, 600.0, 850.0, side_guards=True, duty_class="pallet")
+        validate_inputs(heavy)
+        self.assertEqual(heavy.roller_diameter_mm, 80.0)
+        self.assertTrue(heavy.cross_bracing)
+        d_heavy = derive_configuration(heavy)
+        self.assertGreaterEqual(d_heavy.capacity.rated_total_capacity_kg, 500.0)
+
+    def test_cross_bracing_bom_and_mass(self):
+        from fusion_conveyor_generator import (
+            ConveyorInput,
+            derive_configuration,
+            build_bom,
+            estimate_part_masses_kg,
+            estimate_hardware_masses_kg,
+        )
+        braced = ConveyorInput(1400.0, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True, cross_bracing=True)
+        d_braced = derive_configuration(braced)
+        bom = build_bom(d_braced, True)
+        self.assertIn("leg_cross_struts", bom)
+        self.assertEqual(bom["leg_cross_struts"], d_braced.support_pair_count)
+
+        masses = estimate_part_masses_kg(braced, d_braced)
+        self.assertIn("Leg Cross-Struts", masses)
+        self.assertGreater(masses["Leg Cross-Struts"], 0.0)
+
+        hw = estimate_hardware_masses_kg(braced, d_braced)
+        self.assertIn("Leg Cross-Struts (RHS 40x20)", hw)
+        self.assertIn("Cross-Strut Hardware M8", hw)
+
+    def test_opcua_telemetry_contains_capacity(self):
+        from fusion_conveyor_generator import (
+            ConveyorInput,
+            derive_configuration,
+            generate_opcua_metadata,
+        )
+        cfg = ConveyorInput(1400.0, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True, cross_bracing=True)
+        derived = derive_configuration(cfg)
+        meta = generate_opcua_metadata(cfg, derived, "TEST_CAP")
+        ratings = meta["spec_ratings"]
+        self.assertIn("rated_capacity_kg", ratings)
+        self.assertIn("safety_factor", ratings)
+        self.assertTrue(ratings["cross_bracing_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

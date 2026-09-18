@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,5 +37,8 @@ jobs:
         run: |
           python -m py_compile fusion_conveyor_generator.py
           python -m py_compile fusion_curve_module.py
+          python -m py_compile fusion_docking_system.py
           python -m py_compile conveyor_addin/conveyor_addin.py
           python -m py_compile conveyor_addin/fusion_conveyor_generator.py
+          python -m py_compile conveyor_addin/fusion_curve_module.py
+          python -m py_compile conveyor_addin/fusion_docking_system.py

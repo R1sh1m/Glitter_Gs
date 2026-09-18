@@ -5,6 +5,17 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
 
 ---
 
+## 🎯 Engineering Mission: Standardisation, Quality Control & Safety Benchmarks
+
+Modern global supply chains, e-commerce fulfillment hubs, and manufacturing plants depend on automated material handling systems operating seamlessly 24/7. In engineering and daily life:
+- **Standardisation** enables global interoperability and rapid parts interchangeability (DIN 625 bearings, CEMA 400 roller standards, EN 12020 aluminum extrusions, and IEC 62541 OPC-UA digital twins).
+- **Quality Control** ensures automated CAD B-Rep metrology ($\pm 5.0\text{ mm}$ physical bounding box gate), sketch hygiene, and model-driven BOM derivation that prevents silent geometry drift before manufacturing.
+- **Safety Benchmarks** safeguard human operators and package integrity through ISO 13857 pinch-point guarding, Damon/Interroll $\le 5.0^\circ$ kinematic taper limits, and joint pitch continuity verification.
+
+*See [`Docs/STANDARDS.md`](file:///Docs/STANDARDS.md) for the complete standards index, normative references, and industrial engineering philosophy.*
+
+---
+
 ## 📋 Implemented Scope
 - **User-driven configuration input** through Fusion UI / Add-In dialog:
   - `length_mm` (L): 800–2000 mm
@@ -15,6 +26,9 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
   - `support_spacing_mm` (S): 500–1000 mm
   - `side_guard_height_mm` (G): 0–150 mm
   - `side_guards`: Yes/No
+- **Curved conveyor module** (30°, 45°, 60°, 90°) with tapered speed-matched rollers.
+- **Multi-module 3D kinematic docking** with pitch continuity and port alignment verification.
+- **Industry 4.0 Digital Twin**: Automatic OPC-UA IEC 62541 NodeSet metadata export.
 - **Automated generation** of frame side rails, rollers, support legs, and optional side guards.
 - **Repeated component logic** with dynamic Fusion formula parameters.
 - **Deterministic output & idempotent in-place regeneration**.
@@ -140,6 +154,8 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
 - `Docs/ENGINEERING.md` — sizing math, taper theory, advisory rules, assumptions ledger.
 - `Docs/INTEGRATION.md` — reference-model teardown, floating-roller gaps, IF-010…IF-060 interface gates.
 - `Docs/STANDARDS.md` — index of `Docs/standards/` downloads + normative pointers (CEMA/ISO/IEC).
+- `Docs/SIMULATION.md` — no sim API on this build; greedy analytic loop + manual study recipes.
+- `Docs/ASSEMBLY.md` — Part-vs-Assembly rules, addExistingComponent flow, requested docs.
 - `Docs/VISION_PRODUCTION_LINES.md` — interlockable Lego-style roadmap to production lines.
 - `Docs/reference models/` — measured Poly-V conveyor STEP + photos (teardown evidence).
 - `Docs/standards/` — Interroll/Damon/Inbelts sources (committed, offline-readable).

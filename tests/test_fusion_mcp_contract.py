@@ -60,13 +60,23 @@ if SAMPLE_DIR not in sys.path:
 class FusionMcpContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Import package using importlib because folder has spaces
-        cls.addin_pkg = importlib.import_module("Fusion MCP Addin")
-        cls.registry_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.registry")
-        cls.tool_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.tool")
-        cls.resource_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.resource")
-        cls.item_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.item")
-        cls.server_mod = importlib.import_module("Fusion MCP Addin.server.mcp_server")
+        mcp_addin_dir = os.path.join(SAMPLE_DIR, "Fusion MCP Addin")
+        init_file = os.path.join(mcp_addin_dir, "__init__.py")
+        if not os.path.isdir(mcp_addin_dir) or not os.path.isfile(init_file):
+            raise unittest.SkipTest(
+                f"FusionMCPSample submodule is not checked out (missing {init_file}). "
+                "Run `git submodule update --init --recursive` to run MCP contract tests."
+            )
+        try:
+            # Import package using importlib because folder has spaces
+            cls.addin_pkg = importlib.import_module("Fusion MCP Addin")
+            cls.registry_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.registry")
+            cls.tool_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.tool")
+            cls.resource_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.resource")
+            cls.item_mod = importlib.import_module("Fusion MCP Addin.mcp_primitives.item")
+            cls.server_mod = importlib.import_module("Fusion MCP Addin.server.mcp_server")
+        except ImportError as exc:
+            raise unittest.SkipTest(f"Failed to import Fusion MCP Addin: {exc}")
 
     def setUp(self):
         self.get_tools = self.registry_mod.get_tools

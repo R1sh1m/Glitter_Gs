@@ -115,10 +115,9 @@ class CurveModuleTests(unittest.TestCase):
         d = derive_curve_configuration(demo_curve())
         # Live anchors (cm3): tube 240.6, shaft 73.0, ring 5.6
         self.assertAlmostEqual(hollow_tube_volume_mm3(demo_curve(), d) / 1000.0, 240.6, delta=1.0)
-        self.assertAlmostEqual(shaft_volume_mm3(450.0) / 1000.0, 73.0, delta=0.5)
+        self.assertAlmostEqual(shaft_volume_mm3(450.0) / 1000.0, 76.7, delta=0.5)
         self.assertAlmostEqual(bearing_ring_volume_mm3() / 1000.0, 5.6, delta=0.5)
-        self.assertEqual(shaft_length_for(450.0), 474.0)
-        # Frustum degenerates to cylinder when d0 == d1
+        self.assertEqual(shaft_length_for(450.0), 498.0)        # Frustum degenerates to cylinder when d0 == d1
         self.assertAlmostEqual(
             frustum_volume_mm3(50.0, 50.0, 100.0), math.pi * 25.0 ** 2 * 100.0)
         self.assertTrue(verify_drivetrain_counts(19, 38, d)["all"])
@@ -131,6 +130,54 @@ class CurveModuleTests(unittest.TestCase):
         masses = estimate_hardware_masses_kg(demo_curve(), d)
         for part, kg in masses.items():
             self.assertGreater(kg, 0.0, part)
+
+    def test_belt_and_housing_math(self):
+        from fusion_curve_module import (
+            belt_band_radii_mm,
+            belt_volume_mm3,
+            curve_bom_drive,
+            housing_positions_mm,
+            verify_housings,
+        )
+        d = derive_curve_configuration(demo_curve())
+        r0, r1 = belt_band_radii_mm(d)
+        self.assertAlmostEqual(r0, 1010.0)
+        self.assertAlmostEqual(r1, 1040.0)
+        self.assertGreater(belt_volume_mm3(d), 0.0)
+        hp = housing_positions_mm(demo_curve(), d)
+        self.assertEqual(hp["inner"], (776.0, 788.0))
+        self.assertEqual(hp["outer"], (1262.0, 1274.0))
+        self.assertTrue(verify_housings(38, 38, d)["all"])
+        self.assertFalse(verify_housings(38, 36, d)["all"])
+        bom = curve_bom_drive(demo_curve(), d)
+        self.assertEqual(bom["bearing_housings"], 38)
+        self.assertEqual(bom["drive_belt_band"], 1)
+
+    def test_export_curve_step_writes_file(self):
+        import os
+        import tempfile
+        from fusion_curve_module import export_curve_step
+
+        class FakeExportManager:
+            def __init__(self):
+                self.calls = []
+
+            def createSTEPExportOptions(self, path, comp):
+                self.calls.append((path, comp))
+                return ("opts", path)
+
+            def execute(self, options):
+                with open(options[1], "w", encoding="utf-8") as f:
+                    f.write("ISO-10303-21; mock curve STEP\n")
+
+        class FakeDesign:
+            def __init__(self):
+                self.exportManager = FakeExportManager()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = export_curve_step(FakeDesign(), object(), "Curve90_Test", tmpdir)
+            self.assertTrue(out.endswith("Curve90_Test.step"))
+            self.assertTrue(os.path.exists(out))
 
 
 if __name__ == "__main__":
