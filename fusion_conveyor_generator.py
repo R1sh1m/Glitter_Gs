@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -55,6 +56,17 @@ def _compute_repeated_positions(total_length_mm: float, max_spacing_mm: float, e
 
 
 def validate_inputs(params: ConveyorInput) -> None:
+    values = (
+        params.length_mm,
+        params.width_mm,
+        params.height_mm,
+        params.roller_diameter_mm,
+        params.roller_spacing_mm,
+        params.support_spacing_mm,
+        params.side_guard_height_mm,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("All numeric inputs must be finite.")
     if not (800.0 <= params.length_mm <= 2000.0):
         raise ValueError("length_mm must be within 800-2000 mm.")
     if not (300.0 <= params.width_mm <= 600.0):
@@ -84,7 +96,8 @@ def derive_configuration(params: ConveyorInput) -> ConveyorDerived:
     support_positions, support_spacing = _compute_repeated_positions(
         total_length_mm=params.length_mm,
         max_spacing_mm=params.support_spacing_mm,
-        edge_offset_mm=0.0,
+        # Keep the centre of each leg pair inside the selected length.
+        edge_offset_mm=20.0,
     )
     effective_guard_height = params.side_guard_height_mm if params.side_guards else 0.0
 
@@ -232,6 +245,30 @@ class FusionConveyorGenerator:
         for occ in stale_occurrences:
             occ.deleteMe()
 
+    def _update_user_parameters(self, params: ConveyorInput) -> None:
+        """Persist the active configuration in Fusion's parametric parameter table."""
+        values = {
+            "GG_Length": params.length_mm,
+            "GG_Width": params.width_mm,
+            "GG_Height": params.height_mm,
+            "GG_RollerDiameter": params.roller_diameter_mm,
+            "GG_RollerSpacing": params.roller_spacing_mm,
+            "GG_SupportSpacing": params.support_spacing_mm,
+            "GG_SideGuardHeight": params.side_guard_height_mm,
+        }
+        user_parameters = self.design.userParameters
+        for name, value_mm in values.items():
+            parameter = user_parameters.itemByName(name)
+            if parameter:
+                parameter.expression = f"{value_mm:g} mm"
+            else:
+                user_parameters.add(
+                    name,
+                    adsk.core.ValueInput.createByString(f"{value_mm:g} mm"),
+                    "mm",
+                    "Glitter_Gs conveyor configuration",
+                )
+
     def _new_component(
         self,
         name: str,
@@ -280,7 +317,7 @@ class FusionConveyorGenerator:
         profile = sketch.profiles.item(0)
         extrudes = component.features.extrudeFeatures
         ext_input = extrudes.createInput(profile, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-        ext_input.setDistanceExtent(False, self._mm(roller_width_mm))
+        ext_input.setSymmetricExtent(self._mm(roller_width_mm), True)
         extrudes.add(ext_input)
 
     def _build_frame(self, module_component: "adsk.fusion.Component", params: ConveyorInput) -> None:
@@ -313,7 +350,7 @@ class FusionConveyorGenerator:
             roller_component, _ = self._new_component(
                 f"GG_Roller_{idx + 1:03d}",
                 x_pos,
-                -params.width_mm / 2.0,
+                0.0,
                 params.height_mm + roller_radius,
                 parent=module_component,
             )
@@ -364,6 +401,7 @@ class FusionConveyorGenerator:
 
     def generate(self, params: ConveyorInput) -> Dict[str, object]:
         summary = summarize_configuration(params)
+        self._update_user_parameters(params)
         self._delete_stale()
         module_component, _ = self._new_component("GG_ConveyorModule", 0.0, 0.0, 0.0)
         derived = summary["derived"]
@@ -372,6 +410,16 @@ class FusionConveyorGenerator:
         self._build_rollers(module_component, params, derived)
         self._build_supports(module_component, params, derived)
         self._build_side_guards(module_component, params)
+        module_component.attributes.add(
+            "GG_Conveyor",
+            "Configuration",
+            deterministic_signature(params, derived),
+        )
+        module_component.attributes.add(
+            "GG_Conveyor",
+            "BOM",
+            json.dumps(summary["bom"], sort_keys=True),
+        )
         return summary
 
 

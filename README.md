@@ -28,6 +28,12 @@ Fusion API implementation for a **parametric adjustable roller conveyor configur
   - overall dimensions and feature consistency
   - roller/support spacing constraints and computed positions
 - BOM/component summary generated for each configuration.
+- Fusion parameter persistence:
+  - active dimensions are written to named `GG_` user parameters
+  - the generated module stores its configuration signature and BOM as Fusion attributes
+- Regeneration safety:
+  - support-leg pair centres stay inside the selected conveyor length
+  - rollers are centred across the conveyor width
 
 ## Files
 - `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_conveyor_generator.py`
@@ -54,9 +60,10 @@ Fusion API implementation for a **parametric adjustable roller conveyor configur
 All three are valid and substantially different in dimensions/features.
 
 ## Running in Fusion
-1. Open Fusion and run `/home/runner/work/Glitter_Gs/Glitter_Gs/fusion_conveyor_generator.py`.
+1. Open Fusion and run `fusion_conveyor_generator.py`.
 2. Enter `L,W,H,D,P,S,G,side_guards` in the prompt.
 3. Re-run with changed values to regenerate the model and update repeated components.
+4. Inspect the `GG_ConveyorModule` attributes for the deterministic configuration signature and JSON BOM.
 
 ## Local Verification (outside Fusion)
 ```bash
