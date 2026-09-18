@@ -17,6 +17,7 @@ Architecture adheres to Fusion360AddinSkeleton and FusionGridfinityGenerator par
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -145,6 +146,38 @@ def dialog_defaults() -> dict:
     }
 
 
+def _apply_preset_to_inputs(inputs, preset: dict) -> None:
+    """Apply a preset dictionary to native Fusion command inputs."""
+    module_type = str(preset.get("module_type", "")).lower()
+    if module_type:
+        module_input = inputs.itemById(MODULE_TYPE_ID)
+        if module_input is not None:
+            target = "Curved" if module_type == "curve" else "Straight"
+            for index in range(module_input.listItems.count):
+                item = module_input.listItems.item(index)
+                item.isSelected = target.lower() in item.name.lower()
+
+    duty_name = preset.get(DUTY_CLASS_ID)
+    if duty_name is not None:
+        duty_input = inputs.itemById(DUTY_CLASS_ID)
+        if duty_input is not None:
+            for index in range(duty_input.listItems.count):
+                item = duty_input.listItems.item(index)
+                item.isSelected = str(duty_name).lower() in item.name.lower()
+
+    for key, value in preset.items():
+        item = inputs.itemById(key)
+        if item is None:
+            continue
+        if key in (GUARDS_ID, CROSS_BRACE_ID):
+            item.value = bool(value)
+        elif key == TARGET_LOAD_ID:
+            item.value = f"{float(value):.0f} kg"
+        elif key not in ("module_type", DUTY_CLASS_ID):
+            unit = "deg" if key == "in_angle" else "mm"
+            item.expression = f"{value} {unit}"
+
+
 def values_to_input(values: dict) -> "fcg.ConveyorInput":
     """Convert dialog values dict to a validated straight ConveyorInput."""
     guards = values.get(GUARDS_ID, True)
@@ -192,6 +225,22 @@ def values_to_curve_input(values: dict) -> "fcm.CurveInput":
     )
     fcm.validate_curve_inputs(params)
     return params
+
+
+def _evaluate_to_display_units(units, expression: str, unit: str) -> float:
+    """Evaluate a Fusion expression and convert its internal value to display units."""
+    raw = float(units.evaluateExpression(expression, unit))
+    if unit == "mm":
+        try:
+            return float(units.convert(raw, "cm", "mm"))
+        except Exception:
+            return raw * 10.0
+    if unit == "deg":
+        try:
+            return float(units.convert(raw, "rad", "deg"))
+        except Exception:
+            return math.degrees(raw)
+    return raw
 
 
 def preview_text(params: "fcg.ConveyorInput") -> str:
@@ -328,15 +377,18 @@ def _read_dialog_values(inputs: "adsk.core.CommandInputs") -> dict:
     for spec_id, _label, _unit, _key, _tip in STRAIGHT_SPECS:
         item = inputs.itemById(spec_id)
         if item is not None:
-            # evaluateExpression already returns the value in the requested
-            # output units ("mm") — no further conversion (a second convert
-            # multiplied everything x10 and broke validation).
-            values[spec_id] = float(units.evaluateExpression(item.expression, "mm"))
+            try:
+                values[spec_id] = _evaluate_to_display_units(units, item.expression, "mm")
+            except Exception as exc:
+                raise ValueError(f"{spec_id} ({item.expression!r}): {exc}") from exc
 
     for spec_id, _label, unit, _tip in CURVE_SPECS:
         item = inputs.itemById(spec_id)
         if item is not None:
-            values[spec_id] = float(units.evaluateExpression(item.expression, unit))
+            try:
+                values[spec_id] = _evaluate_to_display_units(units, item.expression, unit)
+            except Exception as exc:
+                raise ValueError(f"{spec_id} ({item.expression!r}): {exc}") from exc
 
     guard_item = inputs.itemById(GUARDS_ID)
     values[GUARDS_ID] = bool(guard_item.value) if guard_item else True
@@ -629,25 +681,7 @@ def run(context):
                         p_name = changed.selectedItem.name
                         presets = load_presets()
                         if p_name in presets:
-                            p = presets[p_name]
-                            for key, val in p.items():
-                                if key == "module_type":
-                                    m_drop = inputs.itemById(MODULE_TYPE_ID)
-                                    if m_drop:
-                                        for i in range(m_drop.listItems.count):
-                                            item = m_drop.listItems.item(i)
-                                            if val.lower() in item.name.lower():
-                                                item.isSelected = True
-                                                break
-                                elif key == GUARDS_ID:
-                                    g_inp = inputs.itemById(GUARDS_ID)
-                                    if g_inp:
-                                        g_inp.value = bool(val)
-                                else:
-                                    f_inp = inputs.itemById(key)
-                                    if f_inp:
-                                        unit = "deg" if key == "in_angle" else "mm"
-                                        f_inp.expression = f"{val} {unit}"
+                            _apply_preset_to_inputs(inputs, presets[p_name])
 
                     # Duty Class or Target Load or Auto-Optimize Change
                     elif changed.id in (DUTY_CLASS_ID, TARGET_LOAD_ID, AUTO_OPTIMIZE_ID) or (
@@ -728,6 +762,7 @@ def run(context):
                 super().__init__()
 
             def notify(self, args):
+                status = None
                 try:
                     vals = _read_dialog_values(args.inputs)
                     mod_type = vals.get(MODULE_TYPE_ID, "Straight Section")
@@ -736,9 +771,13 @@ def run(context):
                     else:
                         values_to_input(vals)
                     args.areInputsValid = True
+                    status = "Ready — Build / Apply is enabled."
                 except Exception as exc:
                     args.areInputsValid = False
-                    args.message = str(exc)
+                    status = f"Cannot build: {exc}"
+                log = args.inputs.itemById(LOG_ID)
+                if log is not None and status:
+                    log.text = status
 
         class ConveyorExecuteHandler(adsk.core.CommandEventHandler):
             def __init__(self):
