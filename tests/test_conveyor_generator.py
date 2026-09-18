@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from fusion_conveyor_generator import (
@@ -83,6 +84,32 @@ class ConveyorGeneratorTests(unittest.TestCase):
         self.assertEqual(bom["side_guards"], 2)
         self.assertGreater(bom["rollers"], 0)
 
+    def test_export_bom_csv(self):
+        import csv
+        import tempfile
+        from fusion_conveyor_generator import export_bom_csv
+
+        demo = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(demo)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = export_bom_csv("TestConfig", demo, derived, tmpdir)
+            self.assertTrue(os.path.exists(csv_path))
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+                self.assertEqual(rows[0], ["Part Name", "Quantity", "Dimensions / Notes"])
+                self.assertEqual(len(rows), 5)  # Header + Rails + Rollers + Legs + Guards
+
+    def test_formula_parameter_calculations(self):
+        import math
+        from fusion_conveyor_generator import LEG_SIDE
+        for name, cfg in demo_configurations().items():
+            expected_rc = math.floor((cfg.length_mm - 2 * (cfg.roller_diameter_mm / 2.0 + 10.0)) / cfg.roller_spacing_mm) + 1
+            expected_lc = math.floor((cfg.length_mm - LEG_SIDE) / cfg.support_spacing_mm) + 1
+            self.assertGreater(expected_rc, 0)
+            self.assertGreater(expected_lc, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
