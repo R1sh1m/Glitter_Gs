@@ -106,13 +106,16 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
 ## 📂 Project Structure
 
 ```
-├── fusion_conveyor_generator.py   # Primary Fusion API script & core engine
+├── fusion_conveyor_generator.py   # Primary Fusion API script & core engine (straight, spec-only)
+├── fusion_curve_module.py         # Curved module (peer): tapered revolve + circular pattern,
+│                                  # C_* params, load advisory, layout-manager ports
 ├── conveyor_addin/
 │   ├── conveyor_addin.manifest    # Add-in manifest (Fusion Add-Ins folder)
 │   └── conveyor_addin.py          # Persistent dialog: typed inputs, live preview,
 │                                  # Export button + log, model reuse (same engine)
 ├── tests/
 │   └── test_conveyor_generator.py # Unit suite: derivation, BOM, CSV, floor-pitch sync (offline)
+│   └── test_curve_module.py       # Curve math, taper kinematics, advisory, formula idioms (offline)
 │   └── test_fusion_api_mock.py    # Mocked Fusion-API integration: params, tree, validation, STEP
 │   └── test_conveyor_addin.py     # Add-in dialog helpers (offline)
 ├── Docs/
@@ -135,13 +138,22 @@ A production-grade Autodesk Fusion API solution that generates and parametricall
 
 ## 📏 Engineering Assumptions (Definition of Done)
 
-- Rail section `20×40 mm`, roller clearance `10 mm`, leg post `40×40 mm`, guard plate `5 mm` — exposed as User Parameters for reviewer edits.
-- `RollerMargin = RollerDia/2 + 10 mm`; counts use fixed-pitch floor math (Spacing pattern type, never Extent rescaling).
-- `LegCount = floor((ConvLength - LegSide)/LegSpacing)+1` keeps posts inside the envelope; the Brief's simplified `floor(L/S)+1` would overhang the last post by up to 40 mm (e.g. C3). Python, Fusion formula, validator and BOM share one implementation (`leg_count_for`).
-- Minimum 2 rollers / 2 leg stations whenever the usable span is positive (stability).
-- `GuardHeight` floors at 1 mm for CAD only (zero-length extrude would fail); visibility is via `isSuppressed`, independent of height — `side_guards=False + G>0` is legal.
-- Mass estimates assume solid structural steel (7850 kg/m³); rollers modelled solid (hollow-tube savings are a documented overestimate); in-Fusion runs prefer measured `physicalProperties` mass.
-- Build collapses to one timeline undo group; reconfigs edit params in place with a single `computeAll()`; patterns use Identical compute for disjoint bodies.
+> Non-code engineering lives in `Docs/` — this section is an index, not the
+> source. Source of truth: `Docs/ENGINEERING.md` (sizing, taper theory,
+> advisory rules), `Docs/INTEGRATION.md` (holes, shafts, drives, docking
+> IF-gates), `Docs/STANDARDS.md` (normative index), `Docs/VISION_PRODUCTION_LINES.md`
+> (interlockable-system roadmap). Key facts: `RollerMargin = D/2+10`,
+> fixed-pitch floor counts, inside-envelope legs, suppression-based guards,
+> rail `20×40` / clearance `10` / post `40×40` / guard `5`, solid-steel mass
+> assumption — all detailed and sourced in `Docs/ENGINEERING.md`.
+
+## 🌀 Curved Module (Full Tapered, Modules-First)
+
+- **Kinematics:** `d_outer = d_inner · Ro/Ri` (surface-speed match); frustum verified live (`Cone` face, analytic volume 1277.6 vs measured 1277.2 cm³).
+- **Counts:** outer-arc floor pitch + 5° angular cap → canonical `N = max(floor, ceil(Θ/5)+1)`; demo 90°/Ri800/W450/P110 → **19 rollers @ 5.0°**, 3 leg stations.
+- **Fusion idioms (live-proven):** trapezoid sketch → `revolveFeatures` 360° → `circularPatternFeatures` about curve-center axis; arc rails/guards as annular-sector sketches → one-sided extrudes; legs radial-patterned; guards via `isSuppressed`. Angles unit-strip with `/ 1 rad`; `pi` and `max()` are **not** available — canonical max lives in Python, Fusion carries both operands (`C_RollerCount`/`C_RollerCountMin`, read back live).
+- **Inputs:** spec-only core untouched; `calculate_load_advisory(box_mass, box_len, box_wid)` suggests P/D/S/W (P≤L/3, W=box+100) clamped to spec ranges.
+- **Deliverables:** `~/ConveyorGenerator_Output/Curve90_Ri800.step` + `Curve90_Ri800_BOM.csv` (7/7 live checks PASS, STEP gated on PASS).
 
 ## 📖 Docs
 

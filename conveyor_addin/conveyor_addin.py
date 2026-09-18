@@ -338,6 +338,14 @@ def run(context):
         control = panel.controls.itemById(ADDIN_ID)
         if control is None:
             panel.controls.addCommand(cmd_def, ADDIN_ID)
+
+        create_panel = workspace.toolbarPanels.itemById("SolidCreatePanel")
+        if create_panel:
+            c_ctrl = create_panel.controls.itemById(ADDIN_ID)
+            if c_ctrl is None:
+                c_ctrl = create_panel.controls.addCommand(cmd_def, ADDIN_ID)
+                c_ctrl.isPromoted = True
+                c_ctrl.isPromotedByDefault = True
     except Exception:
         if ui:
             ui.messageBox(f"Conveyor add-in failed:\n{traceback.format_exc()}")
@@ -353,6 +361,11 @@ def stop(context):
         control = panel.controls.itemById(ADDIN_ID)
         if control is not None and control.isValid:
             control.deleteMe()
+        create_panel = workspace.toolbarPanels.itemById("SolidCreatePanel")
+        if create_panel:
+            c_ctrl = create_panel.controls.itemById(ADDIN_ID)
+            if c_ctrl is not None and c_ctrl.isValid:
+                c_ctrl.deleteMe()
         cmd_def = ui.commandDefinitions.itemById(ADDIN_ID)
         if cmd_def is not None and cmd_def.isValid:
             cmd_def.deleteMe()
