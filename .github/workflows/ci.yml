@@ -11,35 +11,28 @@ jobs:
   ci-checks:
     name: CI (${{ matrix.os }} - Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest
-          npm install -g mcp-remote pyright
+          pip install -r requirements.txt
 
       - name: Step 1 - Python Syntax Compilation Check
         run: |
@@ -64,12 +57,12 @@ jobs:
 
       - name: Step 2 - Code Quality & Linting Check (flake8)
         run: |
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,.venv,venv,out,.agents,FusionMCPSample
-          flake8 . --count --exit-zero --max-complexity=20 --max-line-length=140 --statistics --exclude=.git,__pycache__,.venv,venv,out,.agents,FusionMCPSample
+          python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,.venv,venv,out,.agents,FusionMCPSample
+          python -m flake8 . --count --exit-zero --max-complexity=20 --max-line-length=140 --statistics --exclude=.git,__pycache__,.venv,venv,out,.agents,FusionMCPSample
 
       - name: Step 3 - Static Type Checking (pyright)
         run: |
-          pyright
+          python -m pyright
 
       - name: Step 4 - Comprehensive Local CI Pipeline Runner (run_ci.py)
         run: |

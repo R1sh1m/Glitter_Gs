@@ -308,7 +308,7 @@ def calculate_load_advisory(box_mass_kg: float, box_length_mm: float,
         warnings.append(
             f"Box W={box_width_mm:.0f} needs curve width {w_raw:.0f} (box+100 jam margin), "
             f"above spec max {w_hi:.0f} — split load or request deviation.")
-    expl = (f"P<=Lbox/3={p_raw:.1f} gives {p_rec:.0f}; D by mass/3={box_mass_kg/3:.1f}kg/roller gives {d_rec:.0f}; "
+    expl = (f"P<=Lbox/3={p_raw:.1f} gives {p_rec:.0f}; D by mass/3={box_mass_kg / 3:.1f}kg/roller gives {d_rec:.0f}; "
             f"S by mass gives {s_rec:.0f}; W=box+100={w_raw:.0f} gives {w_rec:.0f}.")
     return LoadAdvisory(p_recommended_mm=p_rec, d_recommended_mm=d_rec,
                         s_recommended_mm=s_rec, w_recommended_mm=w_rec,
@@ -499,7 +499,6 @@ def build_curve_module(design, p: CurveInput):
 
     # --- Docking ports (construction points at arc ends, center radius)
     cpts = comp.constructionPoints
-    inlet, outlet = None, None
     try:
         ci = cpts.createInput()
         ci.setByCoordinates(adsk.core.Point3D.create(rc_cm(p) if False else 0, 0, 0))
@@ -650,7 +649,7 @@ def build_curve_legs(comp, p: CurveInput, derived: CurveDerived, prefix: str = "
         lines.addTwoPointRectangle(c0, c1)
     print(f"LEGS sketch profiles={sk.profiles.count} (expect 2)")
     ext = _extrude_up(comp.features.extrudeFeatures, _collect_profiles(sk),
-                       "C_FrameHeight - 40 mm")
+                      "C_FrameHeight - 40 mm")
     ext.name = prefix + "Extrude_CurveLegs"
     ents = adsk.core.ObjectCollection.create()
     for i in range(ext.bodies.count):
@@ -737,13 +736,17 @@ def validate_curve_cad(design, comp, p: CurveInput, derived: CurveDerived,
         rc_f = int(round(float(rc.value))) if rc else -1
         rc_min_f = int(round(float(rc_min.value))) if rc_min else -1
         lc_f = int(round(float(lc.value))) if lc else -1
-        checks.append(("RollerCount floor readback", rc_f == int(
-            math.floor((derived.arc_outer_mm - 2 * curve_roller_margin_mm(
+        checks.append((
+            "RollerCount floor readback",
+            rc_f == int(math.floor((derived.arc_outer_mm - 2 * curve_roller_margin_mm(
                 p.roller_dia_inner_mm)) / p.roller_pitch_outer_mm)) + 1,
-                       f"Fusion={rc_f}"))
-        checks.append(("RollerCountMin readback", rc_min_f == int(
-            math.ceil(p.curve_angle_deg / MAX_ANGULAR_PITCH_DEG)) + 1,
-                       f"Fusion={rc_min_f}"))
+            f"Fusion={rc_f}",
+        ))
+        checks.append((
+            "RollerCountMin readback",
+            rc_min_f == int(math.ceil(p.curve_angle_deg / MAX_ANGULAR_PITCH_DEG)) + 1,
+            f"Fusion={rc_min_f}",
+        ))
         checks.append(("Canonical count = max(pair)",
                        max(rc_f, rc_min_f) == derived.roller_count,
                        f"max({rc_f},{rc_min_f}) vs py={derived.roller_count}"))
@@ -809,7 +812,178 @@ def build_curve_module_full(design, p: CurveInput, tag: Optional[str] = None):
             "derived": derived, "tag": tag}
     print(f"CURVE_MODULE_OK {tag} rollers={derived.roller_count} legs={derived.support_count}")
     return refs
+
+
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 8. IF-010 rail seat holes (live-proven retrofit method, now parametric)
+#
+# Proven 2026-09-18 on Curve90 (18 holes/rail, bore dia 16 for dia-14 shaft):
+#   - Position = station ANGLE (from roller pattern) x rail BAND CENTER
+#     (rim centers are 10 mm off-band: tube ends, not shafts — never use raw).
+#   - Sketch on rail top face; drop circles via modelToSketchSpace.
+#   - MUST filter profiles by area (face loop would delete the whole rail).
+#   - Scope cuts with participantBodies=[rail] (python list).
+#   - End stations sit on radial end edges (rail-to-rail design) and may drop
+#     to 18/19 honestly; validator tolerates N-2..N with the note attached.
+# ---------------------------------------------------------------------------
+HOLE_BORE_DIA_MM = 16.0
+HOLE_BORE_R_CM = HOLE_BORE_DIA_MM / 2.0 / 10.0
+
+
+def keeps_hole_profile(area_cm2: float) -> bool:
+    """Area gate for sketch-on-face hole profiles (pure, unit-tested).
+
+    Keeps full bores, drops the host-face loop (huge) and slivers.
+    """
+    hole = math.pi * HOLE_BORE_R_CM ** 2
+    return 0.5 * hole < area_cm2 < 2.0 * hole
+
+
+def curve_hole_stations(p: CurveInput, derived: CurveDerived):
+    """Hole stations: (angle_rad, band_radius_mm, rail) per roller (pure).
+
+    Angles span the full pattern 0..Theta; radii are rail band CENTERS
+    (inner Ri+RailW/2, outer Ro-RailW/2) — the shaft line, not tube ends.
+    """
+    n = derived.roller_count
+    stations = []
+    for k in range(n):
+        frac = (k / (n - 1)) if n > 1 else 0.0
+        ang = math.radians(p.curve_angle_deg) * frac
+        stations.append((ang, p.inner_radius_mm + RAIL_W / 2.0, "inner"))
+        stations.append((ang, derived.outer_radius_mm - RAIL_W / 2.0, "outer"))
+    return stations
+
+
+def count_bore_cylinders(comp, rail_body, bore_dia_mm: float = HOLE_BORE_DIA_MM) -> int:
+    """Bore-hole census on a rail body (never raises; 0 when unavailable)."""
+    try:
+        n = 0
+        for i in range(rail_body.faces.count):
+            g = rail_body.faces.item(i).geometry
+            if type(g).__name__ != "Cylinder":
+                continue
+            try:
+                if abs(float(g.radius) * 10.0 - bore_dia_mm / 2.0) < 0.5:
+                    n += 1
+            except Exception:
+                continue
+        return n
+    except Exception:
+        return 0
+
+
+def find_top_face(rail_body, up_axis: str = "y"):
+    """Top planar face of a rail body (max extent along up axis; None ok)."""
+    try:
+        best, best_val = None, -1e18
+        for i in range(rail_body.faces.count):
+            face = rail_body.faces.item(i)
+            try:
+                g = face.geometry
+            except Exception:
+                continue
+            if type(g).__name__ != "Plane":
+                continue
+            try:
+                normal = getattr(g, "normal")
+                ax = {"x": normal.x, "y": normal.y, "z": normal.z}[up_axis]
+            except Exception:
+                continue
+            if abs(float(ax)) < 0.9:
+                continue
+            try:
+                val = getattr(face.boundingBox, "maxPoint").__getattribute__(up_axis)
+            except Exception:
+                continue
+            if val > best_val:
+                best, best_val = face, val
+        return best
+    except Exception:
+        return None
+
+
+def build_curve_holes(comp, p: CurveInput, derived: CurveDerived, prefix: str = ""):
+    """Cut IF-010 seat bores in both arc rails. Returns {'inner': n, 'outer': n}."""
+    rail_bodies = {}
+    try:
+        ext_rails = None
+        for i in range(comp.features.extrudeFeatures.count):
+            feat = comp.features.extrudeFeatures.item(i)
+            if (getattr(feat, "name", "") or "").endswith("Extrude_CurveRails"):
+                ext_rails = feat
+                break
+        if ext_rails is not None:
+            bands = []
+            for i in range(ext_rails.bodies.count):
+                b = ext_rails.bodies.item(i)
+                bands.append(b)
+            bands.sort(key=lambda b: b.boundingBox.maxPoint.x + b.boundingBox.maxPoint.y)
+            rail_bodies = {"inner": bands[0], "outer": bands[-1]}
+    except Exception:
+        rail_bodies = {}
+    if len(rail_bodies) < 2:
+        return {"inner": 0, "outer": 0}
+    counts = {}
+    for tag, band_c in (("inner", p.inner_radius_mm + RAIL_W / 2.0),
+                        ("outer", derived.outer_radius_mm - RAIL_W / 2.0)):
+        rail = rail_bodies[tag]
+        face = find_top_face(rail)
+        if face is None:
+            counts[tag] = 0
+            continue
+        topy = face.boundingBox.maxPoint.y
+        sk = comp.sketches.add(face)
+        sk.name = prefix + "Sketch_CurveHoles_" + tag.capitalize() + "Rail"
+        circ = sk.sketchCurves.sketchCircles
+        n = derived.roller_count
+        for k in range(n):
+            frac = (k / (n - 1)) if n > 1 else 0.0
+            ang = math.radians(p.curve_angle_deg) * frac
+            hx = (band_c / 10.0) * math.cos(ang)
+            hz = (band_c / 10.0) * math.sin(ang)
+            pt2 = sk.modelToSketchSpace(adsk.core.Point3D.create(hx, topy, hz))
+            circ.addByCenterRadius(pt2, HOLE_BORE_R_CM)
+        profs = adsk.core.ObjectCollection.create()
+        kept = 0
+        for i in range(sk.profiles.count):
+            pr = sk.profiles.item(i)
+            try:
+                area = float(pr.areaProperties().area)
+            except Exception:
+                continue
+            if keeps_hole_profile(area):
+                profs.add(pr)
+                kept += 1
+        extrudes = comp.features.extrudeFeatures
+        cut_in = extrudes.createInput(profs, adsk.fusion.FeatureOperations.CutFeatureOperation)
+        cut_in.participantBodies = [rail]
+        dist = adsk.fusion.DistanceExtentDefinition.create(
+            adsk.core.ValueInput.createByString("45 mm"))
+        cut_in.setOneSideExtent(dist, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+        cut = extrudes.add(cut_in)
+        cut.name = prefix + "ExtrudeCut_CurveHoles_" + tag.capitalize()
+        counts[tag] = kept
+    return counts
+
+
+def verify_curve_holes(holes_inner: int, holes_outer: int,
+                       derived: CurveDerived) -> Dict[str, object]:
+    """Hole census vs pattern count (honest end-station tolerance N-2..N).
+
+    Pass counts from count_bore_cylinders() (live) or build_curve_holes()
+    (returned kept counts). End stations on radial end edges may legitimately
+    drop: rail-to-rail ends leave no material for a full bore.
+    """
+    n = derived.roller_count
+    ok_in = (n - 2) <= holes_inner <= n
+    ok_out = (n - 2) <= holes_outer <= n
+    return {"holes_inner": holes_inner, "holes_outer": holes_outer,
+            "expected": n, "inner_ok": ok_in, "outer_ok": ok_out,
+            "all": bool(ok_in and ok_out)}
+
+
 # ---------------------------------------------------------------------------
 # 6. Layout manager stubs (Modules-First: place occurrences, no rebuilds)
 # ---------------------------------------------------------------------------

@@ -157,22 +157,32 @@ def stage_4_type_check() -> bool:
     pyright_found = False
     cmd = []
 
-    # Check if pyright is on PATH
+    # Check if pyright is available as a module or binary
     try:
-        check = subprocess.run(["where", "pyright"] if sys.platform == "win32" else ["which", "pyright"],
+        check = subprocess.run([sys.executable, "-m", "pyright", "--version"],
                                capture_output=True, text=True)
         if check.returncode == 0:
             pyright_found = True
-            cmd = ["pyright"]
+            cmd = [sys.executable, "-m", "pyright"]
     except Exception:
         pass
+
+    if not pyright_found:
+        try:
+            check = subprocess.run(["where", "pyright"] if sys.platform == "win32" else ["which", "pyright"],
+                                   capture_output=True, text=True)
+            if check.returncode == 0:
+                pyright_found = True
+                cmd = ["pyright"]
+        except Exception:
+            pass
 
     if not pyright_found:
         print_info("pyright binary not found in system PATH. Install via 'npm install -g pyright'. Skipping local type check.")
         return True
 
     try:
-        if sys.platform == "win32":
+        if sys.platform == "win32" and cmd == ["pyright"]:
             cmd = ["cmd.exe", "/c", "pyright"]
         res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
         output = res.stdout or res.stderr

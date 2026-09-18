@@ -69,6 +69,37 @@ class CurveModuleTests(unittest.TestCase):
         self.assertIn("C_RollerCountMin", src)
         self.assertIn('ceil(C_CurveAngle / 5 deg)', src)
 
+    def test_hole_stations_follow_angle_and_band_rule(self):
+        from fusion_curve_module import curve_hole_stations
+        d = derive_curve_configuration(demo_curve())
+        st = curve_hole_stations(demo_curve(), d)
+        self.assertEqual(len(st), 2 * d.roller_count)
+        import math
+        angs = sorted({round(a, 9) for a, _, _ in st})
+        self.assertEqual(len(angs), d.roller_count)
+        self.assertAlmostEqual(angs[0], 0.0)
+        self.assertAlmostEqual(angs[-1], math.pi / 2)
+        for _, r, rail in st:
+            if rail == "inner":
+                self.assertAlmostEqual(r, 800.0 + 20.0 / 2.0)
+            else:
+                self.assertAlmostEqual(r, 1250.0 - 20.0 / 2.0)
+
+    def test_hole_area_gate(self):
+        import math
+        from fusion_curve_module import keeps_hole_profile
+        self.assertTrue(keeps_hole_profile(math.pi * 0.8 ** 2))
+        self.assertFalse(keeps_hole_profile(254.47))  # face loop, live value
+        self.assertFalse(keeps_hole_profile(0.05))    # sliver
+
+    def test_hole_verifier_honesty(self):
+        from fusion_curve_module import verify_curve_holes
+        d = derive_curve_configuration(demo_curve())
+        ok = verify_curve_holes(18, 18, d)
+        self.assertTrue(ok["all"])  # 18/19 live result passes (open ends)
+        bad = verify_curve_holes(10, 18, d)
+        self.assertFalse(bad["all"])
+
 
 if __name__ == "__main__":
     unittest.main()

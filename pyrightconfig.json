@@ -1,0 +1,15 @@
+{
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "include": ["."],
+  "exclude": ["**/__pycache__", "**/.venv", "**/out", "**/.git", "**/FusionMCPSample"],
+  "reportMissingImports": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownVariableType": false,
+  "reportOptionalMemberAccess": false,
+  "reportInvalidTypeForm": false,
+  "reportAttributeAccessIssue": false,
+  "reportArgumentType": false,
+  "reportIndexIssue": false,
+  "reportAssignmentType": false
+}

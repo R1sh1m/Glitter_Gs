@@ -1553,3 +1553,170 @@ def run(context):
 
 def stop(context):
     pass
+
+
+# ---------------------------------------------------------------------------
+# 7. IF-010 rail seat holes — straight module (same tested idiom as curve)
+#
+# Live status: curve holes proven 18/19/rail in Fusion (bore dia 16,
+# station-angle x band-center rule, area-gate, scoped cuts). Straight holes
+# below follow the identical idiom; THEY await the first straight live build
+# for visual sign-off (the straight tree itself has never run live in this
+# saga). Frame-proofing: thin-axis auto-detect (rail thickness == RailH)
+# picks the cut axis instead of assuming one.
+# ---------------------------------------------------------------------------
+STRAIGHT_HOLE_BORE_DIA_MM = 16.0
+STRAIGHT_HOLE_BORE_R_CM = STRAIGHT_HOLE_BORE_DIA_MM / 2.0 / 10.0
+
+
+def keeps_hole_profile_straight(area_cm2: float) -> bool:
+    """Shared IF-010 area gate (mirrors fusion_curve_module.keeps_hole_profile)."""
+    hole = math.pi * STRAIGHT_HOLE_BORE_R_CM ** 2
+    return 0.5 * hole < area_cm2 < 2.0 * hole
+
+
+def straight_hole_stations(params: ConveyorInput, derived: ConveyorDerived):
+    """Hole x-stations = roller centre positions (pure).
+
+    One bore per roller per rail at the shaft line. Shafts extend past tube
+    ends into the rails by design (tube starts at RollerMargin while the rail
+    band sits inboard), so stations use roller_positions_mm directly — the
+    straight analogue of the curve angle+band rule (never raw tube ends).
+    """
+    return tuple(float(x) for x in derived.roller_positions_mm)
+
+
+def thin_axis_of_bbox(bb_min, bb_max, thickness_mm: float = RAIL_H):
+    """Axis ('x'/'y'/'z') whose bbox extent matches thickness (never raises).
+
+    Takes coordinate triples (e.g. (bb.minPoint.x, ...) is resolved by the
+    caller). Returns 'y' fallback when nothing matches.
+    """
+    exts = {
+        "x": abs(bb_max[0] - bb_min[0]) * 10.0,
+        "y": abs(bb_max[1] - bb_min[1]) * 10.0,
+        "z": abs(bb_max[2] - bb_min[2]) * 10.0,
+    }
+    best, best_err = "y", 1e18
+    for ax, ext in exts.items():
+        err = abs(ext - thickness_mm)
+        if err < best_err:
+            best, best_err = ax, err
+    return best if best_err <= 1.0 else "y"
+
+
+def build_straight_holes(comp, params: ConveyorInput, derived: ConveyorDerived,
+                         prefix: str = ""):
+    """Cut IF-010 seat bores in both straight side rails. Returns counts dict."""
+    rail_bodies = []
+    try:
+        feats = comp.features.extrudeFeatures
+        for i in range(feats.count):
+            feat = feats.item(i)
+            if (getattr(feat, "name", "") or "").endswith("Extrude_SideRails"):
+                for j in range(feat.bodies.count):
+                    rail_bodies.append(feat.bodies.item(j))
+                break
+    except Exception:
+        return {"near": 0, "far": 0}
+    if len(rail_bodies) < 2:
+        return {"near": 0, "far": 0}
+    try:
+        b0 = rail_bodies[0].boundingBox
+        ax = thin_axis_of_bbox(
+            (b0.minPoint.x, b0.minPoint.y, b0.minPoint.z),
+            (b0.maxPoint.x, b0.maxPoint.y, b0.maxPoint.z))
+    except Exception:
+        ax = "y"
+    counts: Dict[str, int] = {}
+    for tag, rail in (("near", rail_bodies[0]), ("far", rail_bodies[1])):
+        face, best_val = None, -1e18
+        try:
+            for i in range(rail.faces.count):
+                face_i = rail.faces.item(i)
+                try:
+                    g = face_i.geometry
+                except Exception:
+                    continue
+                if type(g).__name__ != "Plane":
+                    continue
+                try:
+                    n = getattr(g.normal, ax)
+                except Exception:
+                    continue
+                if abs(float(n)) < 0.9:
+                    continue
+                try:
+                    val = float(getattr(face_i.boundingBox.maxPoint, ax))
+                except Exception:
+                    continue
+                if val > best_val:
+                    face, best_val = face_i, val
+        except Exception:
+            face = None
+        if face is None:
+            counts[tag] = 0
+            continue
+        top_val = best_val
+        sk = comp.sketches.add(face)
+        sk.name = prefix + "Sketch_StraightHoles_" + tag.capitalize() + "Rail"
+        circ = sk.sketchCurves.sketchCircles
+        for x_mm in straight_hole_stations(params, derived):
+            base = {"x": x_mm / 10.0, ax: top_val}
+            # Other two sketch-plane coords resolve live via modelToSketchSpace;
+            # pass rail-centre placeholders for the remaining axis below.
+            try:
+                cbb = rail.boundingBox
+                mid = {"x": (cbb.minPoint.x + cbb.maxPoint.x) / 2.0,
+                       "y": (cbb.minPoint.y + cbb.maxPoint.y) / 2.0,
+                       "z": (cbb.minPoint.z + cbb.maxPoint.z) / 2.0}
+            except Exception:
+                mid = {"x": 0.0, "y": 0.0, "z": 0.0}
+            coords = {"x": base.get("x", mid["x"]), "y": mid["y"], "z": mid["z"]}
+            coords[ax] = top_val
+            other_axes = [a for a in ("x", "y", "z") if a != ax]
+            # Station runs along the conveyor length axis; find it as the
+            # longest bbox axis and overwrite that coordinate with the station.
+            try:
+                exts = {"x": abs(cbb.maxPoint.x - cbb.minPoint.x),
+                        "y": abs(cbb.maxPoint.y - cbb.minPoint.y),
+                        "z": abs(cbb.maxPoint.z - cbb.minPoint.z)}
+                long_ax = max(other_axes, key=lambda a: exts[a])
+                coords[long_ax] = x_mm / 10.0
+            except Exception:
+                pass
+            pt2 = sk.modelToSketchSpace(
+                adsk.core.Point3D.create(coords["x"], coords["y"], coords["z"]))
+            circ.addByCenterRadius(pt2, STRAIGHT_HOLE_BORE_R_CM)
+        profs = adsk.core.ObjectCollection.create()
+        kept = 0
+        for i in range(sk.profiles.count):
+            pr = sk.profiles.item(i)
+            try:
+                area = float(pr.areaProperties().area)
+            except Exception:
+                continue
+            if keeps_hole_profile_straight(area):
+                profs.add(pr)
+                kept += 1
+        extrudes = comp.features.extrudeFeatures
+        cut_in = extrudes.createInput(profs, adsk.fusion.FeatureOperations.CutFeatureOperation)
+        cut_in.participantBodies = [rail]
+        dist = adsk.fusion.DistanceExtentDefinition.create(
+            adsk.core.ValueInput.createByString("25 mm"))
+        cut_in.setOneSideExtent(dist, adsk.fusion.ExtentDirections.NegativeExtentDirection)
+        cut = extrudes.add(cut_in)
+        cut.name = prefix + "ExtrudeCut_StraightHoles_" + tag.capitalize()
+        counts[tag] = kept
+    return counts
+
+
+def verify_straight_holes(holes_near: int, holes_far: int,
+                          derived: ConveyorDerived) -> Dict[str, object]:
+    """Straight hole census vs roller count (same N-2..N honesty as curve)."""
+    n = derived.roller_count
+    ok_n = (n - 2) <= holes_near <= n
+    ok_f = (n - 2) <= holes_far <= n
+    return {"holes_near": holes_near, "holes_far": holes_far,
+            "expected": n, "near_ok": ok_n, "far_ok": ok_f,
+            "all": bool(ok_n and ok_f)}

@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -32,4 +32,8 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Compile Python sources
-        run: python -m py_compile fusion_conveyor_generator.py
+        run: |
+          python -m py_compile fusion_conveyor_generator.py
+          python -m py_compile fusion_curve_module.py
+          python -m py_compile conveyor_addin/conveyor_addin.py
+          python -m py_compile conveyor_addin/fusion_conveyor_generator.py

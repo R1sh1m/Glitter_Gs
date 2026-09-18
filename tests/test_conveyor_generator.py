@@ -296,5 +296,43 @@ class ConveyorGeneratorTests(unittest.TestCase):
             self.assertEqual(derived.support_pair_count, expected_lc, f"{name} leg drift")
 
 
+class StraightHoleTests(unittest.TestCase):
+    def test_hole_stations_equal_roller_positions(self):
+        from fusion_conveyor_generator import (
+            derive_configuration,
+            demo_configurations,
+            straight_hole_stations,
+        )
+        cfg = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(cfg)
+        stations = straight_hole_stations(cfg, derived)
+        self.assertEqual(len(stations), derived.roller_count)
+        self.assertEqual(list(stations), list(derived.roller_positions_mm))
+
+    def test_thin_axis_detection(self):
+        from fusion_conveyor_generator import thin_axis_of_bbox
+        # Rail-like bbox: long x, 40 mm thin y, mid z (cm units)
+        self.assertEqual(
+            thin_axis_of_bbox((0.0, 71.0, 0.0), (140.0, 75.0, 45.0)), "y")
+        self.assertEqual(
+            thin_axis_of_bbox((0.0, 0.0, -79.3), (82.0, 125.0, -75.3)), "z")
+
+    def test_hole_gate_and_verifier(self):
+        import math
+        from fusion_conveyor_generator import (
+            derive_configuration,
+            demo_configurations,
+            keeps_hole_profile_straight,
+            verify_straight_holes,
+        )
+        self.assertTrue(keeps_hole_profile_straight(math.pi * 0.8 ** 2))
+        self.assertFalse(keeps_hole_profile_straight(2500.0))
+        derived = derive_configuration(demo_configurations()["C2_medium_with_guards"])
+        n = derived.roller_count
+        self.assertTrue(verify_straight_holes(n, n, derived)["all"])
+        self.assertTrue(verify_straight_holes(n - 2, n, derived)["all"])
+        self.assertFalse(verify_straight_holes(n - 3, n, derived)["all"])
+
+
 if __name__ == "__main__":
     unittest.main()

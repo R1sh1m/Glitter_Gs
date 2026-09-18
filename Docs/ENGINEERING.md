@@ -75,6 +75,9 @@ aimed at the curve centre, shaft tilted ≈1.8° so the cone top runs level
 - **End treatment:** curve modules run rollers **rail-to-rail** (flush ends
   for clean handoff); envelope = `Ro + d_out`. (Straight modules inset by
   margin instead — deliberate, documented asymmetry.)
+- **Rail seat holes (IF-010):** bore dia 16 for dia-14 shafts, positioned at
+  station angle x rail band centre (`Ri+RailW/2`, `Ro-RailW/2`); end stations
+  stay open bores. See `INTEGRATION.md` §3.
 - **Fusion expression limits (live-proven 2026-09-18):** strip angle units
   with `/ 1 rad`; `pi` and `max()` are unavailable — Python holds the
   canonical `max()`, Fusion carries both operands (`C_RollerCount`,

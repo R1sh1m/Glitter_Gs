@@ -160,7 +160,7 @@ Patterns studied from [`AutodeskFusion360`](https://github.com/AutodeskFusion360
 
 ### In Autodesk Fusion 360 (Add-in, persistent dialog)
 
-1. Copy the `conveyor_addin/` folder **and** `fusion_conveyor_generator.py` so both live side by side, then place the folder in the Add-Ins directory (`%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` on Windows).
+1. Copy the `conveyor_addin/` folder **and** `fusion_conveyor_generator.py` so both live side by side, then place the folder in the Add-Ins directory (`%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` on Windows). After any root-engine edit, refresh `conveyor_addin/fusion_conveyor_generator.py` as a byte-copy (tests import the copy).
 2. Under **Scripts and Add-Ins → Add-Ins**, run `conveyor_addin` (enable *Run on Startup* to keep it).
 3. Use the toolbar command: typed mm inputs with a **live preview** (counts + est. mass), **Export STEP + BOM Now** without closing, and Apply & Close to reconfigure in place (existing model reused, never rebuilt).
 

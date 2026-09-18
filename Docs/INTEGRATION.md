@@ -46,6 +46,12 @@ Measured 2026-09-18 from `Conveyor Assembly.stp` (3.9 MB), `Roller.stp`,
 1. **P1 — IF-010 hole rows** (straight rails, then arc rails): hole features
    in the same sketch/pattern as rollers so seats can never drift from
    roller positions; validator counts holes == rollers.
+   **DONE curve 2026-09-18:** 18 bores/rail (bore dia 16 for dia-14 shaft),
+   both arc rails, scoped cuts, guards untouched, STEP re-exported
+   (`Curve90_Ri800_holes.step`). End stations stay open (rail-to-rail ends
+   leave no material for a full bore) — validator honesty band N-2..N.
+   Straight side: positions math + builder + tests in place, live sign-off
+   pending first straight live build.
 2. **P2 — IF-020 roller assembly**: shaft + bearing-seat recesses; BOM gains
    shaft/bearing rows; mass model switches tube to hollow.
 3. **P3 — IF-030/031 drive option**: grooved master roller variant + motor
@@ -58,3 +64,23 @@ Measured 2026-09-18 from `Conveyor Assembly.stp` (3.9 MB), `Roller.stp`,
 Rule: no new solid without its holes, no new pattern without its validator
 count, no new bought-out part without a BOM row and a standard in
 `STANDARDS.md`.
+
+## 4. Live-execution lessons (Fusion API, paid for in full)
+
+- **Sketch-on-face needs an area gate:** the host face loop appears as a
+  sketch profile; cutting with it deletes the whole body (twice observed).
+  Filter profiles to bore area (`keeps_hole_profile`, 0.5–2x band).
+- **Holes follow station angle x band centre**, never raw tube-end rims
+  (shafts extend past tube ends into rails by design).
+- **Scope cuts** with `participantBodies=[rail]` (python list) or stacked
+  bodies all get pierced.
+- **Check the timeline for Move features first:** stray manual moves shift
+  absolute coordinates between sessions (radii/positions then mislead);
+  restore authored state by deleting them, and verify with rim/band radii.
+- **One structural delete per run**, exact names only — blind index deletes
+  hit the wrong features, and combined delete transactions hang the solver.
+- **Prints vanish on failure:** split probe/build/verify into small runs so
+  every success leaves a readable trail.
+- **Deploy-copy rule:** `conveyor_addin/fusion_conveyor_generator.py` is a
+  byte-copy of the root engine (self-contained install); refresh it after
+  every root edit or tests import stale code.

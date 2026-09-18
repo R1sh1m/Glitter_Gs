@@ -1,6 +1,3 @@
-# --- LSP local configs (machine-specific, do not commit) ---
-pyrightconfig.json
-.pyrightconfig.json
 .vscode/settings.json
 
 # --- Python ---
