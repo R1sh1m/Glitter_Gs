@@ -206,6 +206,17 @@ def _compute_repeated_positions(total_length_mm: float, max_spacing_mm: float, e
 
 
 def validate_inputs(params: ConveyorInput) -> None:
+    def require_range(label: str, value: float, key: str) -> None:
+        minimum, maximum = RANGES[key]
+        if value < minimum:
+            raise ValueError(
+                f"{label}={value:.6g} mm is smaller than minimum {minimum:.6g} mm."
+            )
+        if value > maximum:
+            raise ValueError(
+                f"{label}={value:.6g} mm is larger than maximum {maximum:.6g} mm."
+            )
+
     values = (
         params.length_mm,
         params.width_mm,
@@ -217,20 +228,13 @@ def validate_inputs(params: ConveyorInput) -> None:
     )
     if not all(math.isfinite(value) for value in values):
         raise ValueError("All numeric inputs must be finite.")
-    if not (RANGES["L"][0] <= params.length_mm <= RANGES["L"][1]):
-        raise ValueError(f"length_mm must be within {RANGES['L'][0]}-{RANGES['L'][1]} mm.")
-    if not (RANGES["W"][0] <= params.width_mm <= RANGES["W"][1]):
-        raise ValueError(f"width_mm must be within {RANGES['W'][0]}-{RANGES['W'][1]} mm.")
-    if not (RANGES["H"][0] <= params.height_mm <= RANGES["H"][1]):
-        raise ValueError(f"height_mm must be within {RANGES['H'][0]}-{RANGES['H'][1]} mm.")
-    if not (RANGES["D"][0] <= params.roller_diameter_mm <= RANGES["D"][1]):
-        raise ValueError(f"roller_diameter_mm must be within {RANGES['D'][0]}-{RANGES['D'][1]} mm.")
-    if not (RANGES["P"][0] <= params.roller_spacing_mm <= RANGES["P"][1]):
-        raise ValueError(f"roller_spacing_mm must be within {RANGES['P'][0]}-{RANGES['P'][1]} mm.")
-    if not (RANGES["S"][0] <= params.support_spacing_mm <= RANGES["S"][1]):
-        raise ValueError(f"support_spacing_mm must be within {RANGES['S'][0]}-{RANGES['S'][1]} mm.")
-    if not (RANGES["G"][0] <= params.side_guard_height_mm <= RANGES["G"][1]):
-        raise ValueError(f"side_guard_height_mm must be within {RANGES['G'][0]}-{RANGES['G'][1]} mm.")
+    require_range("length_mm", params.length_mm, "L")
+    require_range("width_mm", params.width_mm, "W")
+    require_range("height_mm", params.height_mm, "H")
+    require_range("roller_diameter_mm", params.roller_diameter_mm, "D")
+    require_range("roller_spacing_mm", params.roller_spacing_mm, "P")
+    require_range("support_spacing_mm", params.support_spacing_mm, "S")
+    require_range("side_guard_height_mm", params.side_guard_height_mm, "G")
     # Guard height and guard visibility are independent: suppression controls
     # visibility (Brief edge case), height stays as modelled. No rejection here.
 
