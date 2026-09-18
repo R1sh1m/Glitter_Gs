@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "addin",
+    "id": "GlitterGsConveyorAddin",
+    "author": "Glitter_Gs",
+    "description": "Parametric Adjustable Roller Conveyor Generator — Problem Statement A. Persistent dialog with live preview, in-place reconfiguration, validation and STEP/BOM export.",
+    "version": "1.1.0",
+    "runOnStartup": false,
+    "supportedOS": ["windows", "mac"]
+}
