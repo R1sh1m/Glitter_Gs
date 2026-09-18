@@ -52,6 +52,7 @@ LOG_ID = "status_log"
 EXPORT_BTN_ID = "btn_export"
 
 handlers = []
+_registered_controls = []
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +205,67 @@ def _export_current(design: "adsk.fusion.Design", refs: dict, params: "fcg.Conve
     return f"{tag}: PASS. BOM ({bom_name}) + STEP ({os.path.basename(step_path)}) exported."
 
 
+def _workspace_candidates(ui):
+    """Return the active workspace first, followed by known Fusion workspaces."""
+    candidates = []
+    active = getattr(ui, "activeWorkspace", None)
+    if active is not None:
+        candidates.append(active)
+    for workspace_id in ("FusionSolidEnvironment", "AssemblyEnvironment"):
+        workspace = ui.workspaces.itemById(workspace_id)
+        if workspace is not None and all(workspace is not item for item in candidates):
+            candidates.append(workspace)
+    return candidates
+
+
+def _panel_candidates(workspace):
+    """Return likely command panels for both Solid and Assembly workspaces."""
+    panel_ids = (
+        "SolidScriptsAddinsPanel",
+        "SolidCreatePanel",
+        "AssemblyScriptsAddinsPanel",
+        "AssemblyCreatePanel",
+    )
+    panels = []
+    for panel_id in panel_ids:
+        panel = workspace.toolbarPanels.itemById(panel_id)
+        if panel is not None and all(panel is not item for item in panels):
+            panels.append(panel)
+    return panels
+
+
+def _register_command_controls(ui, cmd_def):
+    """Place the command in available active-workspace panels."""
+    _registered_controls.clear()
+    for workspace in _workspace_candidates(ui):
+        for panel in _panel_candidates(workspace):
+            control = panel.controls.itemById(ADDIN_ID)
+            if control is None:
+                control = panel.controls.addCommand(cmd_def, ADDIN_ID)
+            if control is not None:
+                if panel.id.endswith("CreatePanel"):
+                    control.isPromoted = True
+                    control.isPromotedByDefault = True
+                _registered_controls.append((workspace, panel))
+
+
+def _remove_command_controls(ui):
+    """Remove controls from every workspace/panel used during registration."""
+    panels = []
+    for workspace, registered_panel in _registered_controls:
+        if all(registered_panel is not panel for panel in panels):
+            panels.append(registered_panel)
+    for workspace in _workspace_candidates(ui):
+        for panel in _panel_candidates(workspace):
+            if all(panel is not item for item in panels):
+                panels.append(panel)
+    for panel in panels:
+        control = panel.controls.itemById(ADDIN_ID)
+        if control is not None and control.isValid:
+            control.deleteMe()
+    _registered_controls.clear()
+
+
 # ---------------------------------------------------------------------------
 # Add-in entry points (Fusion only)
 # ---------------------------------------------------------------------------
@@ -333,19 +395,9 @@ def run(context):
         cmd_def.commandCreated.add(on_created)
         handlers.append(on_created)
 
-        workspace = ui.workspaces.itemById("FusionSolidEnvironment")
-        panel = workspace.toolbarPanels.itemById("SolidScriptsAddinsPanel")
-        control = panel.controls.itemById(ADDIN_ID)
-        if control is None:
-            panel.controls.addCommand(cmd_def, ADDIN_ID)
-
-        create_panel = workspace.toolbarPanels.itemById("SolidCreatePanel")
-        if create_panel:
-            c_ctrl = create_panel.controls.itemById(ADDIN_ID)
-            if c_ctrl is None:
-                c_ctrl = create_panel.controls.addCommand(cmd_def, ADDIN_ID)
-                c_ctrl.isPromoted = True
-                c_ctrl.isPromotedByDefault = True
+        _register_command_controls(ui, cmd_def)
+        if not _registered_controls:
+            raise RuntimeError("No supported toolbar panel found in the active Fusion workspace.")
     except Exception:
         if ui:
             ui.messageBox(f"Conveyor add-in failed:\n{traceback.format_exc()}")
@@ -356,16 +408,7 @@ def stop(context):
     try:
         app = adsk.core.Application.get()
         ui = app.userInterface
-        workspace = ui.workspaces.itemById("FusionSolidEnvironment")
-        panel = workspace.toolbarPanels.itemById("SolidScriptsAddinsPanel")
-        control = panel.controls.itemById(ADDIN_ID)
-        if control is not None and control.isValid:
-            control.deleteMe()
-        create_panel = workspace.toolbarPanels.itemById("SolidCreatePanel")
-        if create_panel:
-            c_ctrl = create_panel.controls.itemById(ADDIN_ID)
-            if c_ctrl is not None and c_ctrl.isValid:
-                c_ctrl.deleteMe()
+        _remove_command_controls(ui)
         cmd_def = ui.commandDefinitions.itemById(ADDIN_ID)
         if cmd_def is not None and cmd_def.isValid:
             cmd_def.deleteMe()
