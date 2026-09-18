@@ -17,6 +17,7 @@ Architecture adheres to Fusion360AddinSkeleton and FusionGridfinityGenerator par
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -79,8 +80,26 @@ CURVE_SPECS = (
 # Keep backward-compatible tuple for existing tests
 INPUT_SPECS = STRAIGHT_SPECS
 
+# Dialog layout constants (minimal-risk tabbed redesign).
+# Width stays 440px for small screens; height +50px pays for the tab strip.
+# All input IDs are unchanged so _read_dialog_values/validate/execute keep working.
+DIALOG_MIN_WIDTH = 440
+DIALOG_MIN_HEIGHT = 650
+TAB_SETUP_ID = "tab_setup"
+TAB_DIMS_ID = "tab_dimensions"
+TAB_CAPACITY_ID = "tab_capacity"
+TAB_PREVIEW_ID = "tab_preview"
+SETUP_HELP_ID = "help_setup"
+PREVIEW_ROWS = 4
+LOG_ROWS = 3
+
 # Global event handler storage to prevent garbage collection
 handlers = []
+
+# Last validation state, mirrored to the status log only on transitions
+# (per-keystroke log writes were spam; tooltip + debug file carry detail).
+_last_valid_state = None
+_last_valid_msg = ""
 
 # ---------------------------------------------------------------------------
 # Presets Helper
@@ -237,6 +256,167 @@ def preview_curve_text(params: "fcm.CurveInput") -> str:
     except Exception as exc:
         return f"Invalid curve configuration: {exc}"
 
+
+def _try_separator(container, sep_id: str) -> None:
+    """Best-effort separator for visual spacing; never raises (old builds/mocks)."""
+    try:
+        add_fn = getattr(container, "addSeparatorCommandInput", None)
+        if add_fn is None:
+            return
+        add_fn(sep_id)
+    except Exception:
+        pass
+
+
+def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any]], adsk_mod=None):
+    """Build the tabbed command dialog layout (minimal-risk redesign).
+
+    Tabs keep the 440px width usable: each tab shows ~5 controls instead of
+    ~20 stacked controls, so Build/Apply stays reachable without long scrolls.
+    All input IDs are unchanged; top-level ``inputs.itemById`` still resolves
+    nested tab/group children in Fusion.
+
+    Falls back to the flat single-page layout when ``addTabCommandInput`` is
+    unavailable (very old Fusion builds or minimal mocks).
+    Returns a refs dict with ``tabbed`` flag plus created groups.
+    """
+    mod = adsk_mod if adsk_mod is not None else adsk
+    drop_style = mod.core.DropDownStyles.LabeledIconDropDownStyle
+    tabbed = False
+    tabs = []
+    try:
+        tab_setup = inputs.addTabCommandInput(TAB_SETUP_ID, "Setup")
+        tab_dims = inputs.addTabCommandInput(TAB_DIMS_ID, "Dimensions")
+        tab_capacity = inputs.addTabCommandInput(TAB_CAPACITY_ID, "Capacity & Options")
+        tab_preview = inputs.addTabCommandInput(TAB_PREVIEW_ID, "Preview & Status")
+        tabs = [tab_setup, tab_dims, tab_capacity, tab_preview]
+        setup_inputs = tab_setup.children
+        dims_inputs = tab_dims.children
+        capacity_inputs = tab_capacity.children
+        preview_inputs = tab_preview.children
+        tabbed = True
+        try:
+            tab_setup.activate()
+        except Exception:
+            pass
+    except Exception:
+        # Minimal-risk fallback: flat layout identical to pre-tab dialog.
+        setup_inputs = inputs
+        dims_inputs = inputs
+        capacity_inputs = inputs
+        preview_inputs = inputs
+
+    # --- Tab: Setup ---
+    type_drop = setup_inputs.addDropDownCommandInput(MODULE_TYPE_ID, "Module Type", drop_style)
+    type_items = type_drop.listItems
+    type_items.add("Straight Section", True)
+    type_items.add("Curved 90° Section", False)
+    type_items.add("Curved 45° Section", False)
+    type_items.add("Curved 30° Section", False)
+    type_items.add("Curved 60° Section", False)
+
+    preset_drop = setup_inputs.addDropDownCommandInput(PRESET_ID, "Preset / Template", drop_style)
+    p_items = preset_drop.listItems
+    p_items.add("Custom (Manual)", False)
+    for p_name in presets.keys():
+        p_items.add(p_name, p_name == defaults[PRESET_ID])
+
+    _try_separator(setup_inputs, "sep_setup_1")
+    setup_inputs.addTextBoxCommandInput(
+        SETUP_HELP_ID, "How to use",
+        "1. Pick Module Type  2. Pick a Preset (or Custom)  "
+        "3. Edit Dimensions  4. Check Preview & Status  5. Build / Apply.",
+        2, True,
+    )
+
+    # --- Tab: Dimensions ---
+    str_group = dims_inputs.addGroupCommandInput("group_straight", "Straight Dimensions")
+    try:
+        str_group.isExpanded = True
+    except Exception:
+        pass
+    str_inputs = str_group.children
+    for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
+        item = str_inputs.addValueInput(
+            spec_id, label, unit,
+            mod.core.ValueInput.createByString(f"{defaults[spec_id]} mm"),
+        )
+        item.tooltip = tip
+
+    _try_separator(dims_inputs, "sep_dims_1")
+    curv_group = dims_inputs.addGroupCommandInput("group_curved", "Curved Dimensions")
+    try:
+        curv_group.isVisible = False
+        curv_group.isExpanded = True
+    except Exception:
+        pass
+    curv_inputs = curv_group.children
+    for spec_id, label, unit, tip in CURVE_SPECS:
+        item = curv_inputs.addValueInput(
+            spec_id, label, unit,
+            mod.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}"),
+        )
+        item.tooltip = tip
+
+    # --- Tab: Capacity & Options ---
+    duty_group = capacity_inputs.addGroupCommandInput("group_capacity", "Autonomous Capacity & Duty Sizing")
+    try:
+        duty_group.isExpanded = True
+    except Exception:
+        pass
+    duty_inputs = duty_group.children
+    duty_drop = duty_inputs.addDropDownCommandInput(DUTY_CLASS_ID, "Duty Rating", drop_style)
+    d_items = duty_drop.listItems
+    d_items.add("Custom (Manual Specs)", False)
+    d_items.add("Light Duty (150 kg - Cartons & Totes)", False)
+    d_items.add("Medium Duty (450 kg - Boxes & Parts)", True)
+    d_items.add("Heavy Duty (1000 kg - Crates & Machinery)", False)
+    d_items.add("Pallet Heavy (2000 kg - Full Pallets)", False)
+
+    load_in = duty_inputs.addStringValueInput(
+        TARGET_LOAD_ID, "Target Payload", f"{defaults[TARGET_LOAD_ID]:.0f} kg"
+    )
+    load_in.tooltip = "Enter target payload. Autonomous engine auto-tunes rollers and legs on the fly."
+
+    auto_opt = duty_inputs.addBoolValueInput(
+        AUTO_OPTIMIZE_ID, "Autonomous On-The-Fly Sizing", True, "", defaults[AUTO_OPTIMIZE_ID]
+    )
+    auto_opt.tooltip = "When enabled, changing payload or dimensions immediately auto-sizes rollers and leg stations"
+
+    _try_separator(capacity_inputs, "sep_capacity_1")
+    opt_group = capacity_inputs.addGroupCommandInput("group_options", "Options & Accessories")
+    try:
+        opt_group.isExpanded = True
+    except Exception:
+        pass
+    opt_inputs = opt_group.children
+    guard = opt_inputs.addBoolValueInput(GUARDS_ID, "Side Guards", True, "", defaults[GUARDS_ID])
+    guard.tooltip = "Show side-guard plates (suppression-based)"
+    brace = opt_inputs.addBoolValueInput(CROSS_BRACE_ID, "Leg Cross-Struts", True, "", defaults[CROSS_BRACE_ID])
+    brace.tooltip = "Reinforce leg stations with horizontal/diagonal cross-strut ties for anti-sway stability"
+
+    # --- Tab: Preview & Status (export lives here, next to Build/Apply) ---
+    prev_txt = preview_text(values_to_input(defaults))
+    preview_inputs.addTextBoxCommandInput(PREVIEW_ID, "Live Engineering Preview", prev_txt, PREVIEW_ROWS, True)
+    export_opt = preview_inputs.addBoolValueInput(
+        EXPORT_BTN_ID, "Export STEP + BOM + OPC-UA on Apply", True, "", True
+    )
+    export_opt.tooltip = (
+        "When ON, Build/Apply also writes STEP + BOM + OPC-UA files "
+        "(export runs in Execute, never inside InputChanged, so it cannot crash Fusion)."
+    )
+    _try_separator(preview_inputs, "sep_preview_1")
+    preview_inputs.addTextBoxCommandInput(LOG_ID, "Status / Export Log", "Ready.", LOG_ROWS, True)
+
+    return {
+        "tabbed": tabbed,
+        "tabs": tabs,
+        "straight_group": str_group,
+        "curved_group": curv_group,
+        "duty_group": duty_group,
+        "options_group": opt_group,
+    }
+
 # ---------------------------------------------------------------------------
 # Fusion Model Helpers
 # ---------------------------------------------------------------------------
@@ -312,6 +492,41 @@ def ensure_model(design: "adsk.fusion.Design", params: "fcg.ConveyorInput"):
     return refs, False
 
 
+def _eval_length_to_mm(units_mgr, expr: str) -> float:
+    """Evaluate a length expression and return value in millimeters.
+
+    In Autodesk Fusion 360, UnitsManager.evaluateExpression always returns
+    values in internal database units (centimeters for length).
+    We convert the resulting cm to mm (1 cm = 10 mm).
+    """
+    raw = float(units_mgr.evaluateExpression(expr, "mm"))
+    try:
+        return float(units_mgr.convert(raw, "cm", "mm"))
+    except Exception:
+        pass
+    if 500.0 <= raw <= 5000.0:
+        return raw
+    return raw * 10.0
+
+
+def _eval_angle_to_deg(units_mgr, expr: str) -> float:
+    """Evaluate an angle expression and return value in degrees.
+
+    In Autodesk Fusion 360, UnitsManager.evaluateExpression always returns
+    values in internal database units (radians for angle).
+    We convert the resulting radians to degrees (1 rad = 180 / pi deg).
+    """
+    raw = float(units_mgr.evaluateExpression(expr, "deg"))
+    for from_unit in ("rad", "radian"):
+        try:
+            return float(units_mgr.convert(raw, from_unit, "deg"))
+        except Exception:
+            pass
+    if 10.0 <= raw <= 360.0:
+        return raw
+    return math.degrees(raw)
+
+
 def _read_dialog_values(inputs: "adsk.core.CommandInputs") -> dict:
     """Read dialog inputs as mm/deg floats + booleans."""
     app = adsk.core.Application.get()
@@ -327,15 +542,21 @@ def _read_dialog_values(inputs: "adsk.core.CommandInputs") -> dict:
     for spec_id, _label, _unit, _key, _tip in STRAIGHT_SPECS:
         item = inputs.itemById(spec_id)
         if item is not None:
-            # evaluateExpression already returns the value in the requested
-            # output units ("mm") — no further conversion (a second convert
-            # multiplied everything x10 and broke validation).
-            values[spec_id] = float(units.evaluateExpression(item.expression, "mm"))
+            try:
+                values[spec_id] = _eval_length_to_mm(units, item.expression)
+            except Exception as exc:
+                raise ValueError(f"{spec_id} ({item.expression!r}): {exc}")
 
     for spec_id, _label, unit, _tip in CURVE_SPECS:
         item = inputs.itemById(spec_id)
         if item is not None:
-            values[spec_id] = float(units.evaluateExpression(item.expression, unit))
+            try:
+                if unit == "deg":
+                    values[spec_id] = _eval_angle_to_deg(units, item.expression)
+                else:
+                    values[spec_id] = _eval_length_to_mm(units, item.expression)
+            except Exception as exc:
+                raise ValueError(f"{spec_id} ({item.expression!r}): {exc}")
 
     guard_item = inputs.itemById(GUARDS_ID)
     values[GUARDS_ID] = bool(guard_item.value) if guard_item else True
@@ -426,7 +647,7 @@ def run(context):
                     cmd.isOKButtonVisible = True
                     cmd.okButtonText = "Build / Apply"
                     cmd.cancelButtonText = "Close"
-                    cmd.setDialogMinimumSize(440, 600)
+                    cmd.setDialogMinimumSize(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
 
                     on_execute = ConveyorExecuteHandler()
                     cmd.execute.add(on_execute)
@@ -443,86 +664,10 @@ def run(context):
                     inputs = cmd.commandInputs
                     defaults = dialog_defaults()
                     presets = load_presets()
-
-                    # 1. Module Type Selector
-                    type_drop = inputs.addDropDownCommandInput(
-                        MODULE_TYPE_ID, "Module Type", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    type_items = type_drop.listItems
-                    type_items.add("Straight Section", True)
-                    type_items.add("Curved 90° Section", False)
-                    type_items.add("Curved 45° Section", False)
-                    type_items.add("Curved 30° Section", False)
-                    type_items.add("Curved 60° Section", False)
-
-                    # 2. Preset Selector
-                    preset_drop = inputs.addDropDownCommandInput(
-                        PRESET_ID, "Preset / Template", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    p_items = preset_drop.listItems
-                    p_items.add("Custom (Manual)", False)
-                    for p_name in presets.keys():
-                        p_items.add(p_name, p_name == defaults[PRESET_ID])
-
-                    # 2b. Autonomous Capacity & Duty Class Selector
-                    duty_group = inputs.addGroupCommandInput("group_capacity", "Autonomous Capacity & Duty Sizing")
-                    duty_inputs = duty_group.children
-
-                    duty_drop = duty_inputs.addDropDownCommandInput(
-                        DUTY_CLASS_ID, "Duty Rating", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    d_items = duty_drop.listItems
-                    d_items.add("Custom (Manual Specs)", False)
-                    d_items.add("Light Duty (150 kg - Cartons & Totes)", False)
-                    d_items.add("Medium Duty (450 kg - Boxes & Parts)", True)
-                    d_items.add("Heavy Duty (1000 kg - Crates & Machinery)", False)
-                    d_items.add("Pallet Heavy (2000 kg - Full Pallets)", False)
-
-                    load_in = duty_inputs.addStringValueInput(
-                        TARGET_LOAD_ID, "Target Payload", f"{defaults[TARGET_LOAD_ID]:.0f} kg"
-                    )
-                    load_in.tooltip = "Enter target payload. Autonomous engine auto-tunes rollers and legs on the fly."
-
-                    auto_opt = duty_inputs.addBoolValueInput(
-                        AUTO_OPTIMIZE_ID, "Autonomous On-The-Fly Sizing", True, "", defaults[AUTO_OPTIMIZE_ID]
-                    )
-                    auto_opt.tooltip = "When enabled, changing payload or dimensions immediately auto-sizes rollers and leg stations"
-
-                    # 3. Straight inputs group
-                    str_group = inputs.addGroupCommandInput("group_straight", "Straight Dimensions")
-                    str_inputs = str_group.children
-                    for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
-                        item = str_inputs.addValueInput(
-                            spec_id, label, unit,
-                            adsk.core.ValueInput.createByString(f"{defaults[spec_id]} mm")
-                        )
-                        item.tooltip = tip
-
-                    # 4. Curved inputs group
-                    curv_group = inputs.addGroupCommandInput("group_curved", "Curved Dimensions")
-                    curv_group.isVisible = False
-                    curv_inputs = curv_group.children
-                    for spec_id, label, unit, tip in CURVE_SPECS:
-                        item = curv_inputs.addValueInput(
-                            spec_id, label, unit,
-                            adsk.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}")
-                        )
-                        item.tooltip = tip
-
-                    # 5. Accessories & Options
-                    opt_group = inputs.addGroupCommandInput("group_options", "Options & Accessories")
-                    opt_inputs = opt_group.children
-                    guard = opt_inputs.addBoolValueInput(GUARDS_ID, "Side Guards", True, "", defaults[GUARDS_ID])
-                    guard.tooltip = "Show side-guard plates (suppression-based)"
-                    brace = opt_inputs.addBoolValueInput(CROSS_BRACE_ID, "Leg Cross-Struts", True, "", defaults[CROSS_BRACE_ID])
-                    brace.tooltip = "Reinforce leg stations with horizontal/diagonal cross-strut ties for anti-sway stability"
-
-                    # 6. Live Preview & Deliverables Actions
-                    prev_txt = preview_text(values_to_input(defaults))
-                    inputs.addTextBoxCommandInput(PREVIEW_ID, "Live Engineering Preview", prev_txt, 4, True)
-                    export_opt = inputs.addBoolValueInput(EXPORT_BTN_ID, "Export STEP + BOM + OPC-UA on Apply", True, "", True)
-                    export_opt.tooltip = "When ON, Build/Apply also writes STEP + BOM + OPC-UA files (export runs in Execute, never inside InputChanged, so it cannot crash Fusion)."
-                    inputs.addTextBoxCommandInput(LOG_ID, "Status / Export Log", "Ready.", 5, True)
+                    # Tabbed layout (Setup / Dimensions / Capacity & Options /
+                    # Preview & Status) with flat fallback for old builds.
+                    # IDs unchanged; itemById resolves nested tab children.
+                    build_dialog_layout(inputs, defaults, presets)
                 except Exception:
                     app = adsk.core.Application.get()
                     if app and app.userInterface:
@@ -587,6 +732,16 @@ def run(context):
                                         unit = "deg" if key == "in_angle" else "mm"
                                         f_inp.expression = f"{val} {unit}"
 
+                    # Side-guards toggle: grey out guard height when guards are OFF
+                    # (visibility is suppression-based; height stays modelled).
+                    elif changed.id == GUARDS_ID:
+                        try:
+                            guard_h = inputs.itemById("in_guard")
+                            if guard_h is not None:
+                                guard_h.isEnabled = bool(changed.value)
+                        except Exception:
+                            pass
+
                     # Duty Class or Target Load or Auto-Optimize Change
                     elif changed.id in (DUTY_CLASS_ID, TARGET_LOAD_ID, AUTO_OPTIMIZE_ID) or (
                         changed.id in ("in_length", "in_width", "in_height") and inputs.itemById(AUTO_OPTIMIZE_ID) and bool(inputs.itemById(AUTO_OPTIMIZE_ID).value)
@@ -643,21 +798,26 @@ def run(context):
                             log.text = "\n".join(lines)
                         return
 
-                    # Live preview update
+                    # Live preview update (never stale: a read failure shows
+                    # "Invalid input" instead of silently keeping old text).
                     preview = inputs.itemById(PREVIEW_ID)
                     if preview is not None:
-                        vals = _read_dialog_values(inputs)
-                        mod_type = vals.get(MODULE_TYPE_ID, "Straight Section")
-                        if "Curve" in mod_type or "Curved" in mod_type:
-                            try:
-                                preview.text = preview_curve_text(values_to_curve_input(vals))
-                            except Exception as exc:
-                                preview.text = f"Invalid curve: {exc}"
+                        try:
+                            vals = _read_dialog_values(inputs)
+                        except Exception as exc:
+                            preview.text = f"Invalid input: {exc}"
                         else:
-                            try:
-                                preview.text = preview_text(values_to_input(vals))
-                            except Exception as exc:
-                                preview.text = f"Invalid straight: {exc}"
+                            mod_type = vals.get(MODULE_TYPE_ID, "Straight Section")
+                            if "Curve" in mod_type or "Curved" in mod_type:
+                                try:
+                                    preview.text = preview_curve_text(values_to_curve_input(vals))
+                                except Exception as exc:
+                                    preview.text = f"Invalid curve: {exc}"
+                            else:
+                                try:
+                                    preview.text = preview_text(values_to_input(vals))
+                                except Exception as exc:
+                                    preview.text = f"Invalid straight: {exc}"
                 except Exception:
                     pass
 
@@ -666,6 +826,8 @@ def run(context):
                 super().__init__()
 
             def notify(self, args):
+                global _last_valid_state, _last_valid_msg
+                vals = None
                 try:
                     vals = _read_dialog_values(args.inputs)
                     mod_type = vals.get(MODULE_TYPE_ID, "Straight Section")
@@ -674,9 +836,51 @@ def run(context):
                     else:
                         values_to_input(vals)
                     args.areInputsValid = True
+                    if _last_valid_state is not True:
+                        # Transition back to valid: reflect in the status log.
+                        _last_valid_state, _last_valid_msg = True, ""
+                        try:
+                            log_item = args.inputs.itemById(LOG_ID)
+                            if log_item is not None and (log_item.text or "").startswith("Cannot Apply:"):
+                                log_item.text = "Ready."
+                        except Exception:
+                            pass
                 except Exception as exc:
                     args.areInputsValid = False
                     args.message = str(exc)
+                    # Ground truth for greyed-out OK: persist the traceback to
+                    # a plain file (pure IO, never raises) so the exact failing
+                    # field is readable outside Fusion's tooltip. The one-line
+                    # numeric snapshot tells typing-transients apart from a
+                    # systematic unit misread.
+                    try:
+                        snapshot = repr({k: vals.get(k) for k in (
+                            "in_length", "in_width", "in_height", "in_dia",
+                            "in_pitch", "in_leg", "in_guard",
+                            "in_radius", "in_angle") if vals and k in vals})
+                    except Exception:
+                        snapshot = "<unreadable>"
+                    try:
+                        os.makedirs(fcg.DEFAULT_OUTPUT_DIR, exist_ok=True)
+                        with open(os.path.join(fcg.DEFAULT_OUTPUT_DIR, "dialog_debug.log"), "a", encoding="utf-8") as _dbg:
+                            _dbg.write(f"VALIDATE_FAIL: {exc} | values={snapshot}\n{traceback.format_exc()}\n")
+                    except Exception:
+                        pass
+                    try:
+                        args.message = f"{exc} (details: ConveyorGenerator_Output/dialog_debug.log)"
+                    except Exception:
+                        pass
+                    # Mirror into the status log, but only on change of reason
+                    # (per-keystroke appends were the spam users hated).
+                    try:
+                        reason = str(exc)
+                        if reason != _last_valid_msg or _last_valid_state is not False:
+                            _last_valid_state, _last_valid_msg = False, reason
+                            log_item = args.inputs.itemById(LOG_ID)
+                            if log_item is not None:
+                                log_item.text = f"Cannot Apply: {reason}"
+                    except Exception:
+                        pass
 
         class ConveyorExecuteHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -717,6 +921,10 @@ def run(context):
                         derived = fcg.derive_configuration(params)
                         if params.cross_bracing and refs and "component" in refs:
                             fcg.build_leg_cross_bracing(refs["component"], params, derived)
+                        try:
+                            fcg.apply_industrial_appearances(design, refs.get("component"))
+                        except Exception:
+                            pass
                         checks = fcg.validate_cad_model(design, refs["component"], params, refs)
                         lines = [f"  [{'PASS' if p else 'FAIL'}] {label}: {detail}" for label, p, detail in checks]
                         cap = derived.capacity
@@ -771,6 +979,7 @@ def run(context):
                     n_items.add("Curved 90° (Ri=800 mm, W=450 mm)", False)
                     n_items.add("Curved 45° (Ri=800 mm, W=450 mm)", False)
 
+                    _try_separator(inputs, "sep_dock_1")
                     inputs.addTextBoxCommandInput(
                         "dock_info", "Docking Rules",
                         "Snaps the next module to the active conveyor outlet port.\n"
@@ -813,11 +1022,31 @@ def run(context):
                     parent_ports = fcg.get_module_ports(p_str)
                     p_outlet = parent_ports["outlet_port"]
 
+                    # Crash guard (CER 1789759649851): refuse to stack modules onto
+                    # a bloated timeline instead of hanging Fusion.
+                    try:
+                        _tl = design.timeline.count
+                        _oc = design.rootComponent.occurrences.count
+                        if _tl > 800 or _oc > 6:
+                            ui.messageBox(
+                                f"Docking refused: timeline={_tl} occurrences={_oc} "
+                                "(budget 800/6). Delete old Docked_* copies or open "
+                                "a fresh doc before docking."
+                            )
+                            return
+                    except Exception:
+                        pass
+
                     if "Curved" in sel_text:
                         deg = 90.0 if "90" in sel_text else 45.0
                         child_p = fcm.CurveInput(800.0, deg, 450.0, 750.0, 50.0, 110.0, 700.0, 100.0, True)
                         child_derived = fcm.derive_curve_configuration(child_p)
                         child_ports = fcm.get_curve_module_ports(child_p, child_derived)
+                        joint = fds.validate_docking_joint(p_outlet, child_ports["inlet_port"])
+                        failed = [n for n, ok, _ in joint if not ok]
+                        if failed:
+                            ui.messageBox(f"Docking refused: joint mismatch ({'; '.join(failed)}).")
+                            return
                         transform = fds.compute_docking_transform(p_outlet, child_ports["inlet_port"])
                         refs = fcm.build_curve_module_full(design, child_p, f"Docked_Curve_{deg:.0f}deg")
                         occ = refs.get("occurrence")
@@ -827,12 +1056,33 @@ def run(context):
                         length = 1000.0 if "1000" in sel_text else 1400.0
                         child_p = fcg.ConveyorInput(length, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True)
                         child_ports = fcg.get_module_ports(child_p)
+                        joint = fds.validate_docking_joint(p_outlet, child_ports["inlet_port"])
+                        failed = [n for n, ok, _ in joint if not ok]
+                        if failed:
+                            ui.messageBox(f"Docking refused: joint mismatch ({'; '.join(failed)}).")
+                            return
                         transform = fds.compute_docking_transform(p_outlet, child_ports["inlet_port"])
-                        root = design.rootComponent
-                        child_occ = root.occurrences.addNewComponent(transform.to_fusion_matrix())
-                        child_comp = child_occ.component
-                        child_comp.name = f"Docked_Straight_L{length:.0f}"
-                        child_occ.name = f"Docked_Straight_L{length:.0f}"
+                        # Build real straight geometry first (never an empty
+                        # component), then move its occurrence onto the joint.
+                        fcg.create_user_parameters(design, child_p)
+                        straight_refs = fcg.build_parametric_conveyor_model(design)
+                        occ = straight_refs.get("occurrence")
+                        if occ is not None:
+                            try:
+                                occ.name = f"Docked_Straight_L{length:.0f}"
+                                straight_refs["component"].name = f"Docked_Straight_L{length:.0f}"
+                            except Exception:
+                                pass
+                            fds.apply_docking_to_occurrence(occ, transform)
+                        else:
+                            # Part-doc fallback: geometry went to root; cannot
+                            # transform independently — report instead of crash.
+                            ui.messageBox(
+                                "Docked straight built in root (Part doc): "
+                                "geometry created but cannot be moved independently. "
+                                "Open an Assembly doc for movable docked lines."
+                            )
+                            return
 
                     ui.messageBox("Next module docked and aligned to line successfully!\nAll joint tolerances satisfied.")
                 except Exception:

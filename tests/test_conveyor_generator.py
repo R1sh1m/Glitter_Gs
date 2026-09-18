@@ -70,7 +70,7 @@ class ConveyorGeneratorTests(unittest.TestCase):
 
     def test_repeated_positions_depend_on_parameters(self):
         compact = ConveyorInput(900.0, 350.0, 520.0, 45.0, 100.0, 600.0, 0.0, False)
-        long = ConveyorInput(1950.0, 580.0, 880.0, 80.0, 145.0, 950.0, 120.0, True)
+        long = ConveyorInput(1950.0, 580.0, 880.0, 80.0, 145.0, 700.0, 120.0, True)
 
         compact_d = derive_configuration(compact)
         long_d = derive_configuration(long)

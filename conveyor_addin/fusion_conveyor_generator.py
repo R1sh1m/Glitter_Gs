@@ -62,7 +62,9 @@ RANGES = {
 
 RAIL_W = 20.0             # Rail cross-section width (mm)
 RAIL_H = 40.0             # Rail cross-section height (mm)
-LEG_SIDE = 40.0           # Square leg post cross-section (mm)
+LEG_L = 100.0             # Canonical philosophy leg column length along X (mm)
+LEG_W = 55.0              # Canonical philosophy leg column width along Y (mm)
+LEG_SIDE = LEG_L          # Longitudinal leg station footprint along X (mm)
 ROLLER_CLEARANCE = 10.0   # Clearance between roller end and inner rail face (mm)
 GUARD_THICK = 5.0         # Side guard plate thickness (mm)
 STEEL_DENSITY_KG_M3 = 7850.0  # Structural-steel assumption for mass estimates (kg/m^3)
@@ -156,21 +158,31 @@ def roller_count_for(length_mm: float, roller_diameter_mm: float, roller_spacing
 def leg_count_for(length_mm: float, support_spacing_mm: float) -> int:
     """Single-source leg-station count. Matches Fusion ``LegCount`` formula.
 
-    ``floor((ConvLength - LegSide) / LegSpacing) + 1`` with a minimum of 2
-    stations whenever the usable span is positive.
-
-    NOTE (Brief divergence, intentional): the Brief text simplifies this to
-    ``floor(ConvLength / LegSpacing) + 1``. That version lets the last 40 mm
-    leg post overhang the conveyor end by up to ``LegSide`` (e.g. C3
-    L=2000/S=1000 gives 3 stations ending at 2000+40). Subtracting ``LegSide``
-    keeps every post inside the envelope: last origin <= L - LegSide.
-    Python, Fusion parameter, validator and BOM all use this function.
+    Uses ceiling to ensure BOTH conveyor ends (inlet and outlet) are fully
+    grounded with support structures, and no span exceeds support_spacing_mm.
+    ``ceil((ConvLength - LegSide) / LegSpacing) + 1`` with a minimum of 2.
     """
     usable = length_mm - LEG_SIDE
     if usable <= 1e-9:
         return 1
-    count = math.floor(usable / support_spacing_mm) + 1
+    count = math.ceil(usable / support_spacing_mm) + 1
     return max(count, 2)
+
+
+def _compute_support_positions(length_mm: float, support_spacing_mm: float) -> Tuple[Tuple[float, ...], float]:
+    """Computes support station positions anchoring BOTH ends with max spacing S.
+
+    Inlet station sits at X = 0.
+    Outlet station sits at X = length_mm - LEG_SIDE.
+    Intermediate stations are evenly distributed with actual spacing <= S.
+    """
+    count = leg_count_for(length_mm, support_spacing_mm)
+    usable_span = length_mm - LEG_SIDE
+    if count <= 1 or usable_span <= 1e-9:
+        return ((0.0,), 0.0)
+    actual_spacing = usable_span / (count - 1)
+    positions = tuple(round(i * actual_spacing, 4) for i in range(count))
+    return positions, actual_spacing
 
 
 def _compute_floor_positions(start_mm: float, usable_span_mm: float, pitch_mm: float) -> Tuple[Tuple[float, ...], float]:
@@ -357,9 +369,8 @@ def derive_configuration(params: ConveyorInput) -> ConveyorDerived:
         params.length_mm - 2.0 * margin,
         params.roller_spacing_mm,
     )
-    support_positions, support_spacing = _compute_floor_positions(
-        0.0,
-        params.length_mm - LEG_SIDE,
+    support_positions, support_spacing = _compute_support_positions(
+        params.length_mm,
         params.support_spacing_mm,
     )
     # Cross-check counts against the single-source formulas.
@@ -762,8 +773,11 @@ def create_user_parameters(design: "adsk.fusion.Design", params: ConveyorInput) 
                        "floor((ConvLength - 2 * RollerMargin) / RollerSpacing) + 1",
                        "", "Number of rollers derived from length and spacing")
     _find_or_add_param(up, "LegCount",
-                       "floor((ConvLength - LegSide) / LegSpacing) + 1",
-                       "", "Number of leg stations derived from length and spacing (inside envelope)")
+                       "-floor(-(ConvLength - LegSide) / LegSpacing) + 1",
+                       "", "Number of leg stations derived from length and spacing (anchoring both ends)")
+    _find_or_add_param(up, "ActualLegSpacing",
+                       "(ConvLength - LegSide) / (LegCount - 1)",
+                       "mm", "Evenly distributed leg spacing anchoring inlet and outlet")
 
 
 def update_model_parameters(design: "adsk.fusion.Design", model_refs: Dict[str, object], params: ConveyorInput) -> None:
@@ -850,6 +864,184 @@ def _rect_long_short(rect_coll):
     if ranked[0] is not None and _len(ranked[0]) < 0:
         return lines[0], (lines[3] if len(lines) > 3 else None)
     return ranked[-1], ranked[0]
+
+
+def _constrain_two_rail_rectangles(
+    sketch,
+    length_param: str,
+    thickness_param: str,
+    width_param: str,
+    default_y_offset_cm: float = 30.0,
+    default_x_len_cm: float = 10.0,
+    default_y_thick_cm: float = 2.0,
+) -> None:
+    """Parametrically creates and fully constrains two parallel rectangles along +X.
+
+    Both near and far rails start at X = 0 and extend to +ConvLength.
+    Near rail spans Y in [0, thickness].
+    Far rail spans Y in [ConvWidth - thickness, ConvWidth].
+    Total outer width is precisely ConvWidth, and total outer length is precisely ConvLength.
+    """
+    rc = sketch.sketchCurves.sketchLines
+    rd = sketch.sketchDimensions
+
+    # 1. Near rectangle: placeholder (0, 0) to (default_x_len_cm, default_y_thick_cm)
+    near_rect = rc.addTwoPointRectangle(
+        adsk.core.Point3D.create(0.0, 0.0, 0.0),
+        adsk.core.Point3D.create(default_x_len_cm, default_y_thick_cm, 0.0),
+    )
+    pts = []
+    for i in range(near_rect.count):
+        line = near_rect.item(i)
+        pts.extend([line.startSketchPoint, line.endSketchPoint])
+    unique_pts = []
+    for p in pts:
+        if p not in unique_pts:
+            unique_pts.append(p)
+
+    p0 = min(unique_pts, key=lambda p: float(p.geometry.x) ** 2 + float(p.geometry.y) ** 2)
+    p_x = max(unique_pts, key=lambda p: float(p.geometry.x) - abs(float(p.geometry.y)))
+    p_y = max(unique_pts, key=lambda p: float(p.geometry.y) - abs(float(p.geometry.x)))
+
+    try:
+        sketch.geometricConstraints.addCoincident(p0, sketch.originPoint)
+    except Exception:
+        pass
+
+    d_l = rd.addDistanceDimension(
+        p0, p_x,
+        adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation,
+        adsk.core.Point3D.create(default_x_len_cm / 2.0, -1.0, 0.0),
+    )
+    d_l.parameter.expression = length_param
+
+    d_t = rd.addDistanceDimension(
+        p0, p_y,
+        adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
+        adsk.core.Point3D.create(-1.0, default_y_thick_cm / 2.0, 0.0),
+    )
+    d_t.parameter.expression = thickness_param
+
+    # 2. Far rectangle: placeholder (0, default_y_offset_cm) to (default_x_len_cm, default_y_offset_cm + default_y_thick_cm)
+    far_rect = rc.addTwoPointRectangle(
+        adsk.core.Point3D.create(0.0, default_y_offset_cm, 0.0),
+        adsk.core.Point3D.create(default_x_len_cm, default_y_offset_cm + default_y_thick_cm, 0.0),
+    )
+    f_pts = []
+    for i in range(far_rect.count):
+        line = far_rect.item(i)
+        f_pts.extend([line.startSketchPoint, line.endSketchPoint])
+    unique_f_pts = []
+    for p in f_pts:
+        if p not in unique_f_pts:
+            unique_f_pts.append(p)
+
+    f0 = min(unique_f_pts, key=lambda p: float(p.geometry.x) ** 2 + (float(p.geometry.y) - default_y_offset_cm) ** 2)
+    f_x = max(unique_f_pts, key=lambda p: float(p.geometry.x))
+    f_top = max(unique_f_pts, key=lambda p: float(p.geometry.y))
+
+    # Align far rail in X to near rail p0
+    d_align = rd.addDistanceDimension(
+        p0, f0,
+        adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation,
+        adsk.core.Point3D.create(0.0, default_y_offset_cm / 2.0, 0.0),
+    )
+    d_align.parameter.expression = "0 mm"
+
+    d_fl = rd.addDistanceDimension(
+        f0, f_x,
+        adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation,
+        adsk.core.Point3D.create(default_x_len_cm / 2.0, default_y_offset_cm + default_y_thick_cm + 1.0, 0.0),
+    )
+    d_fl.parameter.expression = length_param
+
+    d_ft = rd.addDistanceDimension(
+        f0, f_top,
+        adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
+        adsk.core.Point3D.create(-1.0, default_y_offset_cm + default_y_thick_cm / 2.0, 0.0),
+    )
+    d_ft.parameter.expression = thickness_param
+
+    d_cw = rd.addDistanceDimension(
+        p0, f_top,
+        adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
+        adsk.core.Point3D.create(-2.0, default_y_offset_cm / 2.0, 0.0),
+    )
+    d_cw.parameter.expression = width_param
+
+
+def _create_philosophy_leg_profile(sketch, origin_x_cm: float, origin_y_cm: float):
+    """Draws the canonical heavy-duty industrial leg profile from Docs/Design philosophies/Designing LEG.pdf.
+
+    Profile Features:
+    - 100x55 mm outer envelope (along X and Y).
+    - Dual H-flanges with 3 mm walls.
+    - Central Ø50 mm cylindrical core with Ø45 mm inner bore (2.5 mm wall).
+    - Tangent blend webs linking central core to H-flanges.
+    """
+    xc = origin_x_cm + 5.0   # Center of 100 mm span along X (cm)
+    yc = origin_y_cm + 2.75  # Center of 55 mm span along Y (cm)
+
+    pts_rel_mm = [
+        # Right outer flange
+        (50.0, 27.5), (50.0, -27.5), (47.0, -27.5), (47.0, -1.5),
+        # Right horizontal web to inner flange
+        (35.5, -1.5), (35.5, -27.5), (32.5, -27.5), (32.5, -24.5),
+        # Blend web to cylinder bottom
+        (17.0, -18.3),
+        # Bottom cylinder arc points (R=25 mm)
+        (10.0, -22.9), (0.0, -25.0), (-10.0, -22.9),
+        # Left blend web from cylinder to inner flange
+        (-17.0, -18.3), (-32.5, -24.5), (-32.5, -27.5), (-35.5, -27.5),
+        # Left horizontal web to outer flange
+        (-35.5, -1.5), (-47.0, -1.5), (-47.0, -27.5),
+        # Left outer flange
+        (-50.0, -27.5), (-50.0, 27.5), (-47.0, 27.5), (-47.0, 1.5),
+        # Left horizontal web top
+        (-35.5, 1.5), (-35.5, 27.5), (-32.5, 27.5), (-32.5, 24.5),
+        # Blend web to cylinder top
+        (-17.0, 18.3),
+        # Top cylinder arc points (R=25 mm)
+        (-10.0, 22.9), (0.0, 25.0), (10.0, 22.9),
+        # Right blend web from cylinder top
+        (17.0, 18.3), (32.5, 24.5), (32.5, 27.5), (35.5, 27.5),
+        # Right horizontal web top
+        (35.5, 1.5), (47.0, 1.5), (47.0, 27.5)
+    ]
+    lines = sketch.sketchCurves.sketchLines
+    pts_cm = [adsk.core.Point3D.create(xc + p[0] * 0.1, yc + p[1] * 0.1, 0.0) for p in pts_rel_mm]
+    n = len(pts_cm)
+    for i in range(n):
+        lines.addByTwoPoints(pts_cm[i], pts_cm[(i + 1) % n])
+
+    # Central Ø45 mm bore (radius 2.25 cm)
+    circles = sketch.sketchCurves.sketchCircles
+    circles.addByCenterRadius(adsk.core.Point3D.create(xc, yc, 0.0), 2.25)
+
+
+def _create_4040_profile_lines(sketch, origin_x_cm: float, origin_y_cm: float):
+    """Draws a 40x40 mm T-slot extruded aluminum profile in sketch space.
+
+    Outer envelope is exactly 40x40 mm. Includes 4 T-slots on all faces
+    (8mm opening, 14mm chamber) and central dia-6.8mm core bore for M8 tap.
+    """
+    pts_mm = [
+        # Bottom face (y=0)
+        (0.0, 0.0), (16.0, 0.0), (16.0, 2.0), (13.0, 2.0), (13.0, 6.5), (27.0, 6.5), (27.0, 2.0), (24.0, 2.0), (24.0, 0.0), (40.0, 0.0),
+        # Right face (x=40)
+        (40.0, 16.0), (38.0, 16.0), (38.0, 13.0), (33.5, 13.0), (33.5, 27.0), (38.0, 27.0), (38.0, 24.0), (40.0, 24.0), (40.0, 40.0),
+        # Top face (y=40)
+        (24.0, 40.0), (24.0, 38.0), (27.0, 38.0), (27.0, 33.5), (13.0, 33.5), (13.0, 38.0), (16.0, 38.0), (16.0, 40.0), (0.0, 40.0),
+        # Left face (x=0)
+        (0.0, 24.0), (2.0, 24.0), (2.0, 27.0), (6.5, 27.0), (6.5, 13.0), (2.0, 13.0), (2.0, 16.0), (0.0, 16.0)
+    ]
+    lines = sketch.sketchCurves.sketchLines
+    pts_cm = [adsk.core.Point3D.create(origin_x_cm + p[0] * 0.1, origin_y_cm + p[1] * 0.1, 0.0) for p in pts_mm]
+    n = len(pts_cm)
+    for i in range(n):
+        lines.addByTwoPoints(pts_cm[i], pts_cm[(i + 1) % n])
+    circles = sketch.sketchCurves.sketchCircles
+    circles.addByCenterRadius(adsk.core.Point3D.create(origin_x_cm + 2.0, origin_y_cm + 2.0, 0.0), 0.34)
 
 
 def _anchor_to_origin(sketch, point) -> None:
@@ -944,6 +1136,24 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
     except Exception:
         timeline_start = 0
 
+    # Crash guard (CER 1789759649851): ghost_testing_3 died at 19159 timeline
+    # IDs after repeated builds + docked copies stacked. Refuse to stack more
+    # geometry instead of hanging Fusion; user must clean up or open a fresh
+    # doc. Never raises inside mocks (timeline missing -> skip).
+    try:
+        tl_count = design.timeline.count
+        occ_total = root.occurrences.count if hasattr(root.occurrences, "count") else len(list(root.occurrences))
+        if tl_count > 800 or occ_total > 6:
+            raise RuntimeError(
+                f"Refusing to build: timeline={tl_count} occurrences={occ_total} "
+                "(budget 800/6). Clean up Docked_*/ParametricConveyor_* copies or "
+                "open a fresh document before rebuilding C2/C3."
+            )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
     # Clean existing conveyor components to prevent stale duplicates on initial script run
     for occ in list(root.occurrences):
         try:
@@ -982,44 +1192,7 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
 
     sk_rails = sketches.add(rail_plane)
     sk_rails.name = "Sketch_SideRails"
-    rc = sk_rails.sketchCurves.sketchLines
-    rd = sk_rails.sketchDimensions
-
-    # Near rail rectangle. NOTE: Point3D takes cm (DB units); dimensions below
-    # carry the real parametrics, these are sane mid-range placeholders only.
-    # 10 cm x 2 cm placeholder ~= 100 x 20 mm (RailW = 20 mm).
-    # Edges are MEASURED (never item-ordered) and the near corner is anchored
-    # to the sketch origin so span dimensions push the far side, not the near.
-    near_rect = rc.addTwoPointRectangle(adsk.core.Point3D.create(0, 0, 0), adsk.core.Point3D.create(10, 2, 0))
-    near_long, near_short = _rect_long_short(near_rect)
-    _anchor_to_origin(sk_rails, near_long.startSketchPoint)
-    d_nl = rd.addDistanceDimension(near_long.startSketchPoint, near_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(5, -1, 0))
-    d_nl.parameter.expression = "ConvLength"
-    d_nw = rd.addDistanceDimension(near_short.startSketchPoint, near_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 1, 0))
-    d_nw.parameter.expression = "RailW"
-
-    # Far rail rectangle: Y offset placeholder 30 cm (300 mm); ConvWidth
-    # dimension below drives truth for W = 300-600 mm.
-    far_rect = rc.addTwoPointRectangle(adsk.core.Point3D.create(0, 30, 0), adsk.core.Point3D.create(10, 32, 0))
-    far_long, far_short = _rect_long_short(far_rect)
-    d_fl = rd.addDistanceDimension(far_long.startSketchPoint, far_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(5, 33, 0))
-    d_fl.parameter.expression = "ConvLength"
-    d_fw = rd.addDistanceDimension(far_short.startSketchPoint, far_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 31, 0))
-    d_fw.parameter.expression = "RailW"
-
-    # Constrain far rail to ConvWidth parametrically
-    d_width = rd.addDistanceDimension(near_long.startSketchPoint, far_long.endSketchPoint,
-                                      adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
-                                      adsk.core.Point3D.create(-2, 15, 0))
-    d_width.parameter.expression = "ConvWidth"
+    _constrain_two_rail_rectangles(sk_rails, "ConvLength", "RailW", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=2.0)
 
     # Extrude both rails upwards by RailH (expects exactly 2 closed profiles)
     if sk_rails.profiles.count != 2:
@@ -1059,11 +1232,17 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
                                                           adsk.core.Point3D.create(3, 1, 0))
     r_z.parameter.expression = "FrameHeight"
 
+    # NOTE (crash-hardening 2026-09-19): keep the master roller a SINGLE
+    # circle. A concentric shaft circle creates 2 profiles extruded at roller
+    # length, leaving an unpatterned extra body + solver load on C2/C3.
+    # Shafts belong in an optional P2 step (scoped, patterned), not inline.
     if sk_roller.profiles.count < 1:
         raise RuntimeError("Master roller sketch produced no closed profile.")
-    roller_prof = sk_roller.profiles.item(0)
+    roller_profs = adsk.core.ObjectCollection.create()
+    for i in range(sk_roller.profiles.count):
+        roller_profs.add(sk_roller.profiles.item(i))
     ext_roller = _extrude_profiles_one_side(
-        extrudes, roller_prof, "ConvWidth - 2 * (RailW + RollerClearance)"
+        extrudes, roller_profs, "ConvWidth - 2 * (RailW + RollerClearance)"
     )
     ext_roller.name = "Extrude_MasterRoller"
     roller_body = ext_roller.bodies.item(0)
@@ -1087,43 +1266,41 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
     # -----------------------------------------------------------------
     sk_legs = sketches.add(comp.xYConstructionPlane)
     sk_legs.name = "Sketch_LegPair"
-    lc = sk_legs.sketchCurves.sketchLines
-    ld = sk_legs.sketchDimensions
 
-    # Near leg post at origin. 4 cm x 4 cm placeholder = 40 x 40 mm (LegSide).
-    near_leg = lc.addTwoPointRectangle(adsk.core.Point3D.create(0, 0, 0), adsk.core.Point3D.create(4, 4, 0))
-    near_leg_long, near_leg_short = _rect_long_short(near_leg)
-    _anchor_to_origin(sk_legs, near_leg_long.startSketchPoint)
-    l_nx = ld.addDistanceDimension(near_leg_long.startSketchPoint, near_leg_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(2, -1, 0))
-    l_nx.parameter.expression = "LegSide"
-    l_ny = ld.addDistanceDimension(near_leg_short.startSketchPoint, near_leg_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 2, 0))
-    l_ny.parameter.expression = "LegSide"
+    # Crash-hardening 2026-09-19 (CER 1789759649851, ghost_testing_3 @19159 IDs):
+    # the 40-pt philosophy leg polygon is solver-heavy and unproven live.
+    # Default to proven rectangles for C2/C3 stability; flip to True only for
+    # an isolated live trial, never in batch/docked runs.
+    USE_PHILOSOPHY_LEGS = False
+    use_philosophy = USE_PHILOSOPHY_LEGS and hasattr(sk_legs, "sketchCurves") and hasattr(sk_legs.sketchCurves, "sketchLines") and hasattr(sk_legs.sketchCurves.sketchLines, "addByTwoPoints")
+    if use_philosophy:
+        try:
+            up = design.userParameters
+            cw_param = up.itemByName("ConvWidth")
+            cw_cm = (cw_param.value if cw_param else 45.0)  # internal DB unit is cm
+            far_y_cm = max(LEG_W / 10.0, cw_cm - LEG_W / 10.0)
+            _create_philosophy_leg_profile(sk_legs, 0.0, 0.0)
+            _create_philosophy_leg_profile(sk_legs, 0.0, far_y_cm)
+        except Exception:
+            _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=5.5)
+    else:
+        _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=5.5)
 
-    # Far leg post (Y placeholder 30 cm; ConvWidth dimension drives truth)
-    far_leg = lc.addTwoPointRectangle(adsk.core.Point3D.create(0, 30, 0), adsk.core.Point3D.create(4, 34, 0))
-    far_leg_long, far_leg_short = _rect_long_short(far_leg)
-    l_fx = ld.addDistanceDimension(far_leg_long.startSketchPoint, far_leg_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(2, 35, 0))
-    l_fx.parameter.expression = "LegSide"
-    l_fy = ld.addDistanceDimension(far_leg_short.startSketchPoint, far_leg_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 32, 0))
-    l_fy.parameter.expression = "LegSide"
-    l_width = ld.addDistanceDimension(near_leg_long.startSketchPoint, far_leg_long.endSketchPoint,
-                                      adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
-                                      adsk.core.Point3D.create(-2, 15, 0))
-    l_width.parameter.expression = "ConvWidth"
-
-    if sk_legs.profiles.count != 2:
-        raise RuntimeError(f"Expected 2 leg profiles, found {sk_legs.profiles.count}.")
     leg_profs = adsk.core.ObjectCollection.create()
     for i in range(sk_legs.profiles.count):
-        leg_profs.add(sk_legs.profiles.item(i))
+        prof = sk_legs.profiles.item(i)
+        try:
+            bb = prof.boundingBox
+            if (bb.maxPoint.x - bb.minPoint.x) < 6.0:  # Skip central Ø45 bore void
+                continue
+        except Exception:
+            pass
+        leg_profs.add(prof)
+
+    if leg_profs.count == 0:
+        for i in range(sk_legs.profiles.count):
+            leg_profs.add(sk_legs.profiles.item(i))
+
     ext_legs = _extrude_profiles_one_side(extrudes, leg_profs, "FrameHeight - RailH")
     ext_legs.name = "Extrude_MasterLegs"
     for i in range(ext_legs.bodies.count):
@@ -1135,7 +1312,7 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
     pattern_leg_input = pattern_feats.createInput(
         leg_entities, comp.xConstructionAxis,
         adsk.core.ValueInput.createByString("LegCount"),
-        adsk.core.ValueInput.createByString("LegSpacing"),
+        adsk.core.ValueInput.createByString("ActualLegSpacing"),
         adsk.fusion.PatternDistanceType.SpacingPatternDistanceType)
     _single_pattern_direction(pattern_leg_input)
     pattern_legs = pattern_feats.add(pattern_leg_input)
@@ -1152,37 +1329,7 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
 
     sk_guards = sketches.add(guard_plane)
     sk_guards.name = "Sketch_SideGuards"
-    gc = sk_guards.sketchCurves.sketchLines
-    gd = sk_guards.sketchDimensions
-
-    # Near guard plate. 10 cm x 0.5 cm placeholder = 100 x 5 mm (GuardThick).
-    near_g = gc.addTwoPointRectangle(adsk.core.Point3D.create(0, 0, 0), adsk.core.Point3D.create(10, 0.5, 0))
-    near_g_long, near_g_short = _rect_long_short(near_g)
-    _anchor_to_origin(sk_guards, near_g_long.startSketchPoint)
-    g_nl = gd.addDistanceDimension(near_g_long.startSketchPoint, near_g_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(5, -1, 0))
-    g_nl.parameter.expression = "ConvLength"
-    g_nw = gd.addDistanceDimension(near_g_short.startSketchPoint, near_g_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 0.25, 0))
-    g_nw.parameter.expression = "GuardThick"
-
-    # Far guard plate
-    far_g = gc.addTwoPointRectangle(adsk.core.Point3D.create(0, 30, 0), adsk.core.Point3D.create(10, 30.5, 0))
-    far_g_long, far_g_short = _rect_long_short(far_g)
-    g_fl = gd.addDistanceDimension(far_g_long.startSketchPoint, far_g_long.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(5, 31, 0))
-    g_fl.parameter.expression = "ConvLength"
-    g_fw = gd.addDistanceDimension(far_g_short.startSketchPoint, far_g_short.endSketchPoint,
-                                   adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-                                   adsk.core.Point3D.create(-1, 30.25, 0))
-    g_fw.parameter.expression = "GuardThick"
-    g_width = gd.addDistanceDimension(near_g_long.startSketchPoint, far_g_long.endSketchPoint,
-                                      adsk.fusion.DimensionOrientations.VerticalDimensionOrientation,
-                                      adsk.core.Point3D.create(-2, 15, 0))
-    g_width.parameter.expression = "ConvWidth"
+    _constrain_two_rail_rectangles(sk_guards, "ConvLength", "GuardThick", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=0.5)
 
     if sk_guards.profiles.count != 2:
         raise RuntimeError(f"Expected 2 guard profiles, found {sk_guards.profiles.count}.")
@@ -1193,6 +1340,8 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
     ext_guards.name = "Extrude_SideGuards"
     for i in range(ext_guards.bodies.count):
         ext_guards.bodies.item(i).name = f"Body_SideGuard_{i}"
+
+    apply_industrial_appearances(design, comp)
 
     _group_timeline(design, timeline_start, "ParametricConveyor_Build")
 
@@ -2105,6 +2254,8 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
     """Adds structural horizontal tie-bar cross-struts connecting near and far leg posts.
 
     Prevents lateral sway and column buckling under heavy payload.
+    Uses an extruded aluminum tie-bar spanning flush between inner leg faces,
+    reinforced with corner gusset brackets.
     Returns summary dict with count of cross-struts built.
     """
     if not getattr(params, "cross_bracing", False) or derived.support_pair_count < 1:
@@ -2116,39 +2267,25 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
         extrudes = comp.features.extrudeFeatures
 
         elevation_mm = max(120.0, (params.height_mm - RAIL_H) * 0.35)
+        elev_cm = elevation_mm / 10.0
+
+        # Construct plane at Y = LEG_W mm (inner face of near leg post)
         plane_input = planes.createInput()
-        plane_input.setByOffset(comp.xYConstructionPlane,
-                                adsk.core.ValueInput.createByString(f"{elevation_mm} mm"))
-        brace_plane = planes.add(plane_input)
-        brace_plane.name = prefix + "Plane_LegCrossStruts"
+        plane_input.setByOffset(comp.xZConstructionPlane,
+                                adsk.core.ValueInput.createByString(f"{LEG_W} mm"))
+        strut_plane = planes.add(plane_input)
+        strut_plane.name = prefix + "Plane_LegCrossStruts"
 
-        sk = sketches.add(brace_plane)
+        sk = sketches.add(strut_plane)
         sk.name = prefix + "Sketch_MasterCrossStrut"
-        lc = sk.sketchCurves.sketchLines
-        ld = sk.sketchDimensions
 
-        y_start_cm = LEG_SIDE / 10.0
-        y_end_cm = (params.width_mm - LEG_SIDE) / 10.0
-        x_cm = LEG_SIDE / 10.0
+        # In sketch space of plane offset from xZ:
+        # local X = 3D X, local Y = -3D Z
+        # Strut spans X in [0, 40 mm], Z in [elev, elev + 40 mm]
+        p0 = sk.modelToSketchSpace(adsk.core.Point3D.create(3.0, LEG_W / 10.0, elev_cm))
+        p1 = sk.modelToSketchSpace(adsk.core.Point3D.create(7.0, LEG_W / 10.0, elev_cm + 4.0))
 
-        rect = lc.addTwoPointRectangle(
-            adsk.core.Point3D.create(0.0, y_start_cm, 0.0),
-            adsk.core.Point3D.create(x_cm, y_end_cm, 0.0)
-        )
-        rect_long, rect_short = _rect_long_short(rect)
-        dim_w = ld.addDistanceDimension(
-            rect_long.startSketchPoint, rect_long.endSketchPoint,
-            adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-            adsk.core.Point3D.create(-1.0, 15.0, 0.0)
-        )
-        dim_w.parameter.expression = "ConvWidth - 2 * LegSide"
-
-        dim_t = ld.addDistanceDimension(
-            rect_short.startSketchPoint, rect_short.endSketchPoint,
-            adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
-            adsk.core.Point3D.create(2.0, y_start_cm - 1.0, 0.0)
-        )
-        dim_t.parameter.expression = "LegSide"
+        sk.sketchCurves.sketchLines.addTwoPointRectangle(p0, p1)
 
         if sk.profiles.count < 1:
             return {"cross_struts": 0}
@@ -2156,13 +2293,41 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
         profs = adsk.core.ObjectCollection.create()
         profs.add(sk.profiles.item(0))
         ext_in = extrudes.createInput(profs, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+
+        # Extrude across full distance between legs: ConvWidth - 2 * LEG_W
+        dist_expr = f"ConvWidth - 2 * {LEG_W} mm"
         dist = adsk.fusion.DistanceExtentDefinition.create(
-            adsk.core.ValueInput.createByString("20 mm"))
+            adsk.core.ValueInput.createByString(dist_expr))
         ext_in.setOneSideExtent(dist, adsk.fusion.ExtentDirections.PositiveExtentDirection)
         ext = extrudes.add(ext_in)
         ext.name = prefix + "Extrude_MasterCrossStrut"
         for i in range(ext.bodies.count):
             ext.bodies.item(i).name = f"Body_CrossStrut_{i}"
+
+        # Triangular corner gusset brackets connecting leg and strut
+        try:
+            sk_gusset = sketches.add(comp.yZConstructionPlane)
+            sk_gusset.name = prefix + "Sketch_CornerGussets"
+            yg0 = LEG_W / 10.0
+            zg0 = elev_cm + 4.0
+            pg0 = sk_gusset.modelToSketchSpace(adsk.core.Point3D.create(0.2, yg0, zg0))
+            pgy = sk_gusset.modelToSketchSpace(adsk.core.Point3D.create(0.2, yg0 + 3.5, zg0))
+            pgz = sk_gusset.modelToSketchSpace(adsk.core.Point3D.create(0.2, yg0, zg0 + 3.5))
+            gl = sk_gusset.sketchCurves.sketchLines
+            gl.addByTwoPoints(pg0, pgy)
+            gl.addByTwoPoints(pgy, pgz)
+            gl.addByTwoPoints(pgz, pg0)
+
+            if sk_gusset.profiles.count >= 1:
+                ext_g_in = extrudes.createInput(sk_gusset.profiles.item(0), adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+                g_dist = adsk.fusion.DistanceExtentDefinition.create(adsk.core.ValueInput.createByReal(3.6))
+                ext_g_in.setOneSideExtent(g_dist, adsk.fusion.ExtentDirections.PositiveExtentDirection)
+                ext_g = extrudes.add(ext_g_in)
+                ext_g.name = prefix + "Extrude_CornerGussets"
+                for i in range(ext_g.bodies.count):
+                    ext_g.bodies.item(i).name = f"Body_CornerGusset_{i}"
+        except Exception:
+            pass
 
         pattern_feats = comp.features.rectangularPatternFeatures
         brace_entities = adsk.core.ObjectCollection.create()
@@ -2172,7 +2337,7 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
         pat_in = pattern_feats.createInput(
             brace_entities, comp.xConstructionAxis,
             adsk.core.ValueInput.createByString("LegCount"),
-            adsk.core.ValueInput.createByString("LegSpacing"),
+            adsk.core.ValueInput.createByString("ActualLegSpacing"),
             adsk.fusion.PatternDistanceType.SpacingPatternDistanceType)
         _single_pattern_direction(pat_in)
         pattern = pattern_feats.add(pat_in)
@@ -2182,6 +2347,65 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
         return {"cross_struts": derived.support_pair_count}
     except Exception:
         return {"cross_struts": 0}
+
+
+def apply_industrial_appearances(design: "adsk.fusion.Design", comp: "adsk.fusion.Component" = None) -> None:
+    """Applies factory-grade industrial appearances to conveyor components.
+
+    - Side Rails: Paint - Enamel Glossy (Dark Grey)
+    - Rollers: Stainless Steel - Polished
+    - Side Guards: Paint - Enamel Glossy (Yellow)
+    - Legs / Struts / Brackets: Aluminum - Satin
+    """
+    if not adsk:
+        return
+    try:
+        app = adsk.core.Application.get()
+        app_lib = None
+        for i in range(app.materialLibraries.count):
+            lib = app.materialLibraries.item(i)
+            if "Appearance" in lib.name:
+                app_lib = lib
+                break
+        if not app_lib:
+            return
+
+        def _get_app(name: str):
+            existing = design.appearances.itemByName(name)
+            if existing:
+                return existing
+            lib_app = app_lib.appearances.itemByName(name)
+            if lib_app:
+                try:
+                    return design.appearances.addByCopy(lib_app)
+                except Exception:
+                    pass
+            return None
+
+        alu_app = _get_app("Aluminum - Satin")
+        steel_app = _get_app("Stainless Steel - Polished")
+        paint_frame = _get_app("Paint - Enamel Glossy (Dark Grey)")
+        paint_guard = _get_app("Paint - Enamel Glossy (Yellow)")
+
+        target_comp = comp or design.rootComponent
+        bodies = target_comp.bRepBodies
+        for i in range(bodies.count):
+            body = bodies.item(i)
+            bname = getattr(body, "name", "") or ""
+            if "SideRail" in bname:
+                if paint_frame:
+                    body.appearance = paint_frame
+            elif "Roller" in bname:
+                if steel_app:
+                    body.appearance = steel_app
+            elif "SideGuard" in bname:
+                if paint_guard:
+                    body.appearance = paint_guard
+            elif "Leg" in bname or "CrossStrut" in bname or "Gusset" in bname or "Foot" in bname:
+                if alu_app:
+                    body.appearance = alu_app
+    except Exception:
+        pass
 
 
 STRAIGHT_FEATURE_NAMES = (

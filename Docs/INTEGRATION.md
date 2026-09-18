@@ -118,9 +118,10 @@ count, no new bought-out part without a BOM row and a standard in
   Negate radial-z placements deliberately (proven on rails, feet, boards).
 - **Screen-up is -Y in iso captures:** legs read as rising bars; always
   cross-check front/top + body census before declaring geometry wrong.
-- **`evaluateExpression` returns requested units — never convert after it:**
-  a second `convert()` multiplied lengths x10 and angles x57.3, failing all
-  validation (live symptom: "must be within ..." on valid inputs).
+- **`evaluateExpression` returns internal database units (`cm` for length, `rad` for angle):**
+  Always convert length `cm` -> `mm` and angle `rad` -> `deg`. An incorrect test mock previously
+  removed this conversion, causing all live dialog inputs to be 10x too small (e.g. 140 mm
+  instead of 1400 mm), which broke all parameter range validation in Fusion 360.
 - **Keep a body budget:** name-grouped counts must sum exactly (105 = 2+19+
   6+2+19+38+1+4+1+1+6+2+4); any drift means duplication or loss.
 - **Never trust `rect.item()` order:** measure edges, dimension the measured

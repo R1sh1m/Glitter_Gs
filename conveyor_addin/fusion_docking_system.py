@@ -43,7 +43,7 @@ class DockingTransform:
     def transform_point_mm(self, pt: Tuple[float, float, float]) -> Tuple[float, float, float]:
         x = self.r[0][0] * pt[0] + self.r[0][1] * pt[1] + self.r[0][2] * pt[2] + self.t_mm[0]
         y = self.r[1][0] * pt[0] + self.r[1][1] * pt[1] + self.r[1][2] * pt[2] + self.t_mm[1]
-        z = self.r[2][0] * pt[0] + self.r[2][1] * pt[2] + self.r[2][2] * pt[2] + self.t_mm[2]
+        z = self.r[2][0] * pt[0] + self.r[2][1] * pt[1] + self.r[2][2] * pt[2] + self.t_mm[2]
         return (x, y, z)
 
     def to_fusion_matrix(self) -> "adsk.core.Matrix3D":

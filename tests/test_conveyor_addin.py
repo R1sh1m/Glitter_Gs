@@ -1,5 +1,6 @@
 """Offline tests for the conveyor add-in dialog helpers (no Fusion needed)."""
 
+import math
 import os
 import sys
 import unittest
@@ -87,14 +88,20 @@ class ConveyorAddinHelperTests(unittest.TestCase):
 
             def evaluateExpression(self, expr, unit):
                 val, frm = self._split(expr)
-                to_mm = {"mm": 1.0, "cm": 10.0}
-                to_deg = {"deg": 1.0, "rad": 57.29578}
-                if unit in ("mm", "cm"):
-                    return val * to_mm.get(frm, 1.0) / to_mm[unit]
-                return val * to_deg.get(frm, 1.0) / to_deg[unit]
+                # Real Fusion 360 UnitsManager returns internal database units:
+                # Length -> cm, Angle -> radians
+                to_cm = {"mm": 0.1, "cm": 1.0, "m": 100.0}
+                to_rad = {"deg": math.radians(1.0), "rad": 1.0}
+                if frm in to_cm or unit in ("mm", "cm", "m"):
+                    return val * to_cm.get(frm, 0.1)
+                return val * to_rad.get(frm, math.radians(1.0))
 
             def convert(self, v, frm, to):
-                return v * 10.0  # hostile: proves we never call it
+                if frm == "cm" and to == "mm":
+                    return v * 10.0
+                if frm in ("rad", "radian") and to in ("deg", "degree"):
+                    return math.degrees(v)
+                return v
 
         class FakeProduct:
             unitsManager = FakeUnits()
@@ -158,6 +165,60 @@ class ConveyorAddinHelperTests(unittest.TestCase):
         self.assertIn("Rated Safe Load:", text)
         self.assertIn("Structural Safety Factor", text)
         self.assertIn("Cross-Struts:", text)
+
+    def test_read_dialog_values_names_failing_field(self):
+        """A bad expression must raise ValueError naming the field id."""
+        real_adsk = addin.adsk
+
+        class FakeUnits:
+            def evaluateExpression(self, expr, unit):
+                if expr == "bogus":
+                    raise RuntimeError("bad expression")
+                return 1400.0
+
+        class FakeProduct:
+            unitsManager = FakeUnits()
+
+        class FakeApp:
+            activeProduct = FakeProduct()
+
+            @staticmethod
+            def get():
+                return FakeApp()
+
+        class FakeCore:
+            Application = FakeApp
+
+        class FakeAdsk:
+            core = FakeCore()
+
+        class Item:
+            def __init__(self, expression="", value=None, selected=None):
+                self.expression = expression
+                self.value = value
+                self.selectedItem = (
+                    type("S", (), {"name": selected})() if selected else None
+                )
+
+        table = {
+            addin.MODULE_TYPE_ID: Item(selected="Straight Section"),
+            addin.PRESET_ID: Item(selected="Custom"),
+            addin.GUARDS_ID: Item(value=True),
+            "in_length": Item(expression="bogus"),
+            "in_width": Item(expression="450 mm"),
+        }
+
+        class FakeInputs:
+            def itemById(self, i):
+                return table.get(i)
+
+        addin.adsk = FakeAdsk()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                addin._read_dialog_values(FakeInputs())
+        finally:
+            addin.adsk = real_adsk
+        self.assertIn("in_length", str(ctx.exception))
 
     def test_duty_presets_contain_capacity_and_cross_brace(self):
         presets = addin.load_presets()
