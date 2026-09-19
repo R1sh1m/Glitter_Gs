@@ -178,6 +178,28 @@ def _apply_preset_to_inputs(inputs, preset: dict) -> None:
             item.expression = f"{value} {unit}"
 
 
+def _sync_module_inputs(inputs) -> None:
+    """Keep module visibility and curve angle aligned with the module selector."""
+    module_input = inputs.itemById(MODULE_TYPE_ID)
+    selected = module_input.selectedItem.name if module_input and module_input.selectedItem else "Straight Section"
+    is_curve = "Curved" in selected or "Curve" in selected
+
+    straight_group = inputs.itemById("group_straight")
+    curved_group = inputs.itemById("group_curved")
+    if straight_group is not None:
+        straight_group.isVisible = not is_curve
+    if curved_group is not None:
+        curved_group.isVisible = is_curve
+
+    if is_curve:
+        angle_input = inputs.itemById("in_angle")
+        if angle_input is not None:
+            for angle in ("90", "45", "30", "60"):
+                if angle in selected:
+                    angle_input.expression = f"{angle} deg"
+                    break
+
+
 def values_to_input(values: dict) -> "fcg.ConveyorInput":
     """Convert dialog values dict to a validated straight ConveyorInput."""
     guards = values.get(GUARDS_ID, True)
@@ -655,26 +677,7 @@ def run(context):
 
                     # Module Type Switch: toggle straight vs curved groups
                     if changed.id == MODULE_TYPE_ID:
-                        sel = changed.selectedItem.name if changed.selectedItem else "Straight Section"
-                        is_curve = "Curved" in sel or "Curve" in sel
-                        grp_str = inputs.itemById("group_straight")
-                        grp_crv = inputs.itemById("group_curved")
-                        if grp_str:
-                            grp_str.isVisible = not is_curve
-                        if grp_crv:
-                            grp_crv.isVisible = is_curve
-                        # Set angle automatically based on dropdown selection
-                        if is_curve:
-                            angle_inp = inputs.itemById("in_angle")
-                            if angle_inp:
-                                if "90" in sel:
-                                    angle_inp.expression = "90 deg"
-                                elif "45" in sel:
-                                    angle_inp.expression = "45 deg"
-                                elif "30" in sel:
-                                    angle_inp.expression = "30 deg"
-                                elif "60" in sel:
-                                    angle_inp.expression = "60 deg"
+                        _sync_module_inputs(inputs)
 
                     # Preset Selection Change
                     elif changed.id == PRESET_ID and changed.selectedItem:
@@ -682,6 +685,10 @@ def run(context):
                         presets = load_presets()
                         if p_name in presets:
                             _apply_preset_to_inputs(inputs, presets[p_name])
+                            _sync_module_inputs(inputs)
+                            log = inputs.itemById(LOG_ID)
+                            if log is not None:
+                                log.text = f"Preset applied: {p_name}"
 
                     # Duty Class or Target Load or Auto-Optimize Change
                     elif changed.id in (DUTY_CLASS_ID, TARGET_LOAD_ID, AUTO_OPTIMIZE_ID) or (
