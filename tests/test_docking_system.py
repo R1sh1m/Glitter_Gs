@@ -101,6 +101,40 @@ class DockingSystemTests(unittest.TestCase):
         failed_w = [name for name, passed, _ in checks_w if not passed]
         self.assertIn("Rail Width Match", failed_w)
 
+    def test_plane_continuity_straight_and_curve(self):
+        """Verify both straight and curved modules share identical Z-up vertical axis and carry plane."""
+        p_str = fcg.ConveyorInput(1400.0, 450.0, 750.0, 60.0, 110.0, 700.0, 100.0, True)
+        p_curv = fcm.CurveInput(800.0, 90.0, 450.0, 750.0, 50.0, 110.0, 700.0, 100.0, True)
+
+        ports_str = fcg.get_module_ports(p_str)
+        derived_curv = fcm.derive_curve_configuration(p_curv)
+        ports_curv = fcm.get_curve_module_ports(p_curv, derived_curv)
+
+        # Both modules declare +Z as their vertical up-vector
+        self.assertEqual(ports_str["outlet_port"]["up"], (0.0, 0.0, 1.0))
+        self.assertEqual(ports_curv["inlet_port"]["up"], (0.0, 0.0, 1.0))
+
+        transform = fds.compute_docking_transform(ports_str["outlet_port"], ports_curv["inlet_port"])
+
+        # Transformed child inlet must lie on the exact same Z plane as parent outlet
+        inlet_transformed = transform.transform_point_mm(ports_curv["inlet_port"]["origin_mm"])
+        outlet_transformed = transform.transform_point_mm(ports_curv["outlet_port"]["origin_mm"])
+
+        self.assertAlmostEqual(inlet_transformed[2], ports_str["outlet_port"]["origin_mm"][2])
+        self.assertAlmostEqual(outlet_transformed[2], ports_str["outlet_port"]["origin_mm"][2])
+        self.assertAlmostEqual(inlet_transformed[2], 750.0)
+
+        # Verify Up vector under rotation remains strictly vertical (+Z)
+        up_c = ports_curv["inlet_port"]["up"]
+        up_transformed = (
+            transform.r[0][0] * up_c[0] + transform.r[0][1] * up_c[1] + transform.r[0][2] * up_c[2],
+            transform.r[1][0] * up_c[0] + transform.r[1][1] * up_c[1] + transform.r[1][2] * up_c[2],
+            transform.r[2][0] * up_c[0] + transform.r[2][1] * up_c[1] + transform.r[2][2] * up_c[2],
+        )
+        self.assertAlmostEqual(up_transformed[0], 0.0)
+        self.assertAlmostEqual(up_transformed[1], 0.0)
+        self.assertAlmostEqual(up_transformed[2], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

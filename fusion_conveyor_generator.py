@@ -736,6 +736,12 @@ def _mm_expr(val: float) -> str:
 def _find_or_add_param(user_params: "adsk.fusion.UserParameters", name: str, expr: str, unit: str, comment: str = ""):
     existing = user_params.itemByName(name)
     if existing:
+        if name in ("RollerCount", "LegCount", "ActualLegSpacing", "RollerMargin"):
+            try:
+                if existing.expression.replace(" ", "") != expr.replace(" ", ""):
+                    existing.expression = expr
+            except Exception:
+                pass
         return existing
     val_input = adsk.core.ValueInput.createByString(expr)
     return user_params.add(name, val_input, unit, comment)
@@ -801,6 +807,21 @@ def update_model_parameters(design: "adsk.fusion.Design", model_refs: Dict[str, 
     _set_param_value(up, "RollerSpacing", _mm_expr(params.roller_spacing_mm))
     _set_param_value(up, "LegSpacing", _mm_expr(params.support_spacing_mm))
     _set_param_value(up, "GuardHeight", _mm_expr(max(params.side_guard_height_mm, 1.0)))
+
+    # Ensure derived formula parameter expressions stay in sync with engine updates
+    formula_params = (
+        ("RollerCount", "floor((ConvLength - 2 * RollerMargin) / RollerSpacing) + 1"),
+        ("LegCount", "-floor(-(ConvLength - LegSide) / LegSpacing) + 1"),
+        ("ActualLegSpacing", "(ConvLength - LegSide) / (LegCount - 1)"),
+    )
+    for f_name, f_expr in formula_params:
+        fp = up.itemByName(f_name)
+        if fp is not None:
+            try:
+                if fp.expression.replace(" ", "") != f_expr.replace(" ", ""):
+                    fp.expression = f_expr
+            except Exception:
+                pass
 
     # Toggle side guard feature suppression (visibility independent of height)
     ext_guards = model_refs.get("ext_guards")
@@ -1176,7 +1197,6 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
         comp_occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
         comp = comp_occ.component
         comp.name = "ParametricConveyor_Assembly"
-        comp_occ.name = "ParametricConveyor_Assembly"
     except Exception:
         comp_occ = None
         comp = root
@@ -1399,7 +1419,41 @@ def validate_cad_model(design: "adsk.fusion.Design", comp: "adsk.fusion.Componen
         actual_l = (bbox.maxPoint.x - bbox.minPoint.x) * 10.0
     if actual_w is None:
         actual_w = (bbox.maxPoint.y - bbox.minPoint.y) * 10.0
-    actual_h = (bbox.maxPoint.z - bbox.minPoint.z) * 10.0
+    # Height MUST come from straight bodies only (shared-root safe).
+    # comp.boundingBox unions curve/docked/cross-brace bodies in Part docs
+    # (live: 2596.6 mm actual vs 850 mm expected) while L/W already use
+    # rail bodies. Patterns run along X so master-body Z == full-tree Z.
+    actual_h = None
+    try:
+        _straight = straight_feature_bodies(comp)
+        _guard_feat = None
+        try:
+            _guard_feat = model_refs.get("ext_guards") if model_refs else None
+        except Exception:
+            _guard_feat = None
+        _guard_suppressed = False
+        try:
+            _guard_suppressed = bool(_guard_feat.isSuppressed) if _guard_feat is not None else False
+        except Exception:
+            _guard_suppressed = False
+        _zmins: list = []
+        _zmaxs: list = []
+        for _fname, _blist in _straight.items():
+            if _fname == "Extrude_SideGuards" and _guard_suppressed:
+                continue
+            for _b in (_blist or []):
+                try:
+                    _bb = _b.boundingBox
+                    _zmins.append(float(_bb.minPoint.z))
+                    _zmaxs.append(float(_bb.maxPoint.z))
+                except Exception:
+                    continue
+        if _zmins and _zmaxs:
+            actual_h = (max(_zmaxs) - min(_zmins)) * 10.0
+    except Exception:
+        actual_h = None
+    if actual_h is None:
+        actual_h = (bbox.maxPoint.z - bbox.minPoint.z) * 10.0
 
     checks.append((
         "Length within 5mm tolerance",

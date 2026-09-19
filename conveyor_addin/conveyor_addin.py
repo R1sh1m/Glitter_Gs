@@ -21,7 +21,7 @@ import math
 import os
 import sys
 import traceback
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 _here = os.path.dirname(os.path.realpath(__file__))
 for _candidate in (_here, os.path.dirname(_here)):
@@ -99,7 +99,7 @@ _registered_controls = []
 
 # Last validation state, mirrored to the status log only on transitions
 # (per-keystroke log writes were spam; tooltip + debug file carry detail).
-_last_valid_state = None
+_last_valid_state: Optional[bool] = None
 _last_valid_msg = ""
 
 # ---------------------------------------------------------------------------
@@ -1072,7 +1072,10 @@ def run(context):
                     # Find parent conveyor in root occurrences
                     parent_occ = None
                     for occ in design.rootComponent.occurrences:
-                        if (occ.name or "").startswith("ParametricConveyor") or (occ.name or "").startswith("CurveModule"):
+                        c_name = (occ.component.name or "") if occ.component else ""
+                        o_name = occ.name or ""
+                        if (o_name.startswith("ParametricConveyor") or o_name.startswith("CurveModule") or
+                                c_name.startswith("ParametricConveyor") or c_name.startswith("CurveModule")):
                             parent_occ = occ
                             break
 
@@ -1132,7 +1135,6 @@ def run(context):
                         occ = straight_refs.get("occurrence")
                         if occ is not None:
                             try:
-                                occ.name = f"Docked_Straight_L{length:.0f}"
                                 straight_refs["component"].name = f"Docked_Straight_L{length:.0f}"
                             except Exception:
                                 pass

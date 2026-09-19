@@ -135,11 +135,11 @@ def curve_roller_count_for(angle_deg: float, ri_mm: float, width_mm: float,
     usable = total_outer - 2.0 * curve_roller_margin_mm(d_inner_mm)
     if usable <= 1e-9:
         return 1
-    count = int(math.floor(usable / pitch_outer_mm)) + 1
+    count = math.floor(usable / pitch_outer_mm) + 1
     count = max(count, MIN_CURVE_ROLLERS if usable > 0 else 1)
     # Enforce max 5 deg angular pitch (Damon/Interroll): bump N if needed
     if angle_deg > 0 and count > 1:
-        min_for_angle = int(math.ceil(angle_deg / MAX_ANGULAR_PITCH_DEG)) + 1
+        min_for_angle = math.ceil(angle_deg / MAX_ANGULAR_PITCH_DEG) + 1
         count = max(count, min_for_angle)
     return count
 
@@ -188,7 +188,7 @@ def derive_curve_configuration(p: CurveInput) -> CurveDerived:
     if usable_s <= 1e-9:
         s_count = 1
     else:
-        s_count = max(2, int(math.floor(usable_s / p.support_spacing_mm)) + 1)
+        s_count = max(2, math.floor(usable_s / p.support_spacing_mm) + 1)
     # Footprint of annular sector (conservative bbox for layout manager)
     theta = math.radians(p.curve_angle_deg)
     # chord/height of sector
@@ -370,31 +370,32 @@ def build_tapered_master_roller(comp, d_inner_mm: float, d_outer_mm: float,
                                 start_radius_mm: float, name: str = "Body_RollerTapered_Master"):
     """Trapezoid sketch revolved 360 deg about roller (radial) axis.
 
-    Sketch plane: XY at roller height; trapezoid symmetric about the X axis
-    (radial direction); axis line y=0 from x0 to x1; revolve full circle.
+    Sketch plane: XZ at y=0 (contains radial X + vertical Z); trapezoid centered at
+    z = axis_height_mm; axis line through center along X; revolve full circle.
     Returns (revolve_feature, body).
     """
     sketches = comp.sketches
     revolves = comp.features.revolveFeatures
-    # Sketch on XY plane (contains radial X + lateral Y); height via geometry offset
-    sk = sketches.add(comp.xYConstructionPlane)
+    # Sketch on XZ plane (contains radial X + vertical Z)
+    sk = sketches.add(comp.xZConstructionPlane)
     sk.name = "Sketch_TaperedRollerMaster"
     lines = sk.sketchCurves.sketchLines
     # cm placeholders (DB units); real dims via dimension expressions below
     x0, x1 = start_radius_mm / 10.0, (start_radius_mm + roller_len_mm) / 10.0
     r0, r1 = (d_inner_mm / 2.0) / 10.0, (d_outer_mm / 2.0) / 10.0
-    y_off = axis_height_mm / 10.0
-    p0 = adsk.core.Point3D.create(x0, y_off - r0, 0)
-    p1 = adsk.core.Point3D.create(x1, y_off - r1, 0)
-    p2 = adsk.core.Point3D.create(x1, y_off + r1, 0)
-    p3 = adsk.core.Point3D.create(x0, y_off + r0, 0)
+    z_off = axis_height_mm / 10.0
+    p0 = sk.modelToSketchSpace(adsk.core.Point3D.create(x0, 0, z_off - r0))
+    p1 = sk.modelToSketchSpace(adsk.core.Point3D.create(x1, 0, z_off - r1))
+    p2 = sk.modelToSketchSpace(adsk.core.Point3D.create(x1, 0, z_off + r1))
+    p3 = sk.modelToSketchSpace(adsk.core.Point3D.create(x0, 0, z_off + r0))
     lines.addByTwoPoints(p0, p1)
     lines.addByTwoPoints(p1, p2)
     lines.addByTwoPoints(p2, p3)
     lines.addByTwoPoints(p3, p0)
-    # True axis: horizontal line through center at y_off
-    axis_line = lines.addByTwoPoints(adsk.core.Point3D.create(x0, y_off, 0),
-                                     adsk.core.Point3D.create(x1, y_off, 0))
+    # True axis: horizontal line through center at z_off
+    ax0 = sk.modelToSketchSpace(adsk.core.Point3D.create(x0, 0, z_off))
+    ax1 = sk.modelToSketchSpace(adsk.core.Point3D.create(x1, 0, z_off))
+    axis_line = lines.addByTwoPoints(ax0, ax1)
     # Axis line inside trapezoid splits profiles (observed: 2 profiles live).
     # Pick the largest-area profile robustly (never assume item(0)).
     prof = sk.profiles.item(0)
@@ -440,7 +441,6 @@ def build_curve_module(design, p: CurveInput):
     comp = occ.component
     tag = f"ParametricCurveModule_{p.curve_angle_deg:.0f}deg_Ri{p.inner_radius_mm:.0f}"
     comp.name = tag
-    occ.name = tag
 
     # --- Arc rails: annular sector sketch on rail-bottom plane, extrude RailH
     planes = comp.constructionPlanes
@@ -480,7 +480,7 @@ def build_curve_module(design, p: CurveInput):
     ext_rails = extrudes.add(ext_in)
     ext_rails.name = "Extrude_CurveRails"
 
-    # --- Master tapered roller + circular pattern about curve center (Y axis)
+    # --- Master tapered roller + circular pattern about curve center (Z axis)
     roller_len = p.width_mm - 2.0 * (RAIL_W + ROLLER_CLEARANCE)
     _rev, master_body = build_tapered_master_roller(
         comp, p.roller_dia_inner_mm, derived.roller_dia_outer_mm,
@@ -488,7 +488,12 @@ def build_curve_module(design, p: CurveInput):
     ents = adsk.core.ObjectCollection.create()
     ents.add(master_body)
     circ_feats = comp.features.circularPatternFeatures
-    circ_in = circ_feats.createInput(ents, comp.yConstructionAxis)
+    circ_in = circ_feats.createInput(ents, comp.zConstructionAxis)
+    circ_in.quantity = adsk.core.ValueInput.createByReal(float(derived.roller_count))
+    circ_in.totalAngle = adsk.core.ValueInput.createByString("C_CurveAngle")
+    circ_in.isSymmetric = False
+    pat_rollers = circ_feats.add(circ_in)
+    pat_rollers.name = "Pattern_CurveRollers"
     # Prototype: Python N literal (enforces 5-deg angular cap). TODO: wire to
     # C_RollerCount once Fusion max()/ceil() expression syntax is validated live.
     circ_in.quantity = adsk.core.ValueInput.createByReal(float(derived.roller_count))
@@ -520,14 +525,14 @@ def rc_cm(p: CurveInput) -> float:  # tiny helper kept for API symmetry
 
 
 # ---------------------------------------------------------------------------
-# 7. Full module builders v2 (live-hardened: Y-up, XZ plan sketches)
+# 7. Full module builders v2 (live-hardened: Z-up, XY plan sketches)
 #
-# Convention (proven live 2026-09-18 on tapered prototype + 4x30 pattern):
-#   - Plan-view sketches on xZConstructionPlane (normal = +Y vertical).
-#     Heights via plane offsets along Y; extrudes along +Y.
-#   - Tapered roller master reuses build_tapered_master_roller (XY sketch,
-#     radial X axis at height offset) — verified bbox 390x78.1x78.1 + Cone face.
-#   - Circular patterns about yConstructionAxis (vertical, curve center).
+# Convention (aligned with straight conveyor & docking system):
+#   - Plan-view sketches on xYConstructionPlane (normal = +Z vertical).
+#     Heights via plane offsets along Z; extrudes along +Z.
+#   - Tapered roller master uses build_tapered_master_roller (XZ sketch,
+#     radial X axis at height Z offset) — verified bbox 390x78.1x78.1 + Cone face.
+#   - Circular patterns about zConstructionAxis (vertical, curve center).
 # ---------------------------------------------------------------------------
 def _target_component(design, tag: str):
     """Assembly doc -> fresh occurrence component; Part doc -> root (namespaced).
@@ -539,7 +544,6 @@ def _target_component(design, tag: str):
         occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
         comp = occ.component
         comp.name = tag
-        occ.name = tag
         print(f"TARGET new component {tag}")
         return comp, occ
     except Exception as exc:
@@ -583,7 +587,7 @@ def build_curve_rails(comp, p: CurveInput, prefix: str = ""):
     del _RH
     planes = comp.constructionPlanes
     pin = planes.createInput()
-    pin.setByOffset(comp.xZConstructionPlane,
+    pin.setByOffset(comp.xYConstructionPlane,
                     adsk.core.ValueInput.createByString("C_FrameHeight - 40 mm"))
     plane = planes.add(pin)
     plane.name = prefix + "Plane_CurveRail_Bottom"
@@ -616,7 +620,7 @@ def build_curve_rollers(comp, p: CurveInput, derived: CurveDerived, prefix: str 
     ents = adsk.core.ObjectCollection.create()
     ents.add(master)
     circ = comp.features.circularPatternFeatures
-    ci = circ.createInput(ents, comp.yConstructionAxis)
+    ci = circ.createInput(ents, comp.zConstructionAxis)
     try:
         ci.quantity = adsk.core.ValueInput.createByString("C_RollerCount")
         ci.totalAngle = adsk.core.ValueInput.createByString("C_CurveAngle")
@@ -625,7 +629,7 @@ def build_curve_rollers(comp, p: CurveInput, derived: CurveDerived, prefix: str 
         print("PATTERN wired to C_RollerCount/C_CurveAngle params")
     except Exception as exc:
         print(f"PATTERN param wiring failed ({exc}); fallback to literals")
-        ci2 = circ.createInput(ents, comp.yConstructionAxis)
+        ci2 = circ.createInput(ents, comp.zConstructionAxis)
         ci2.quantity = adsk.core.ValueInput.createByReal(float(derived.roller_count))
         ci2.totalAngle = adsk.core.ValueInput.createByString(f"{p.curve_angle_deg} deg")
         ci2.isSymmetric = False
@@ -636,7 +640,7 @@ def build_curve_rollers(comp, p: CurveInput, derived: CurveDerived, prefix: str 
 
 def build_curve_legs(comp, p: CurveInput, derived: CurveDerived, prefix: str = ""):
     """Master radial leg pair on floor plane + circular pattern about center."""
-    sk = comp.sketches.add(comp.xZConstructionPlane)  # y=0 floor
+    sk = comp.sketches.add(comp.xYConstructionPlane)  # z=0 floor
     sk.name = prefix + "Sketch_CurveLegs"
     lines = sk.sketchCurves.sketchLines
     half = LEG_SIDE / 2.0 / 10.0  # cm
@@ -658,7 +662,7 @@ def build_curve_legs(comp, p: CurveInput, derived: CurveDerived, prefix: str = "
         ents.add(b)
     circ = comp.features.circularPatternFeatures
     try:
-        ci = circ.createInput(ents, comp.yConstructionAxis)
+        ci = circ.createInput(ents, comp.zConstructionAxis)
         ci.quantity = adsk.core.ValueInput.createByString("C_LegCount")
         ci.totalAngle = adsk.core.ValueInput.createByString("C_CurveAngle")
         ci.isSymmetric = False
@@ -666,7 +670,7 @@ def build_curve_legs(comp, p: CurveInput, derived: CurveDerived, prefix: str = "
         print("LEG PATTERN wired to C_LegCount/C_CurveAngle")
     except Exception as exc:
         print(f"LEG PATTERN param wiring failed ({exc}); fallback to literals")
-        ci = circ.createInput(ents, comp.yConstructionAxis)
+        ci = circ.createInput(ents, comp.zConstructionAxis)
         ci.quantity = adsk.core.ValueInput.createByReal(float(derived.support_count))
         ci.totalAngle = adsk.core.ValueInput.createByString(f"{p.curve_angle_deg} deg")
         ci.isSymmetric = False
@@ -679,7 +683,7 @@ def build_curve_guards(comp, p: CurveInput, derived: CurveDerived, prefix: str =
     """Two thin curved guard walls on rail tops; suppression = visibility."""
     planes = comp.constructionPlanes
     pin = planes.createInput()
-    pin.setByOffset(comp.xZConstructionPlane,
+    pin.setByOffset(comp.xYConstructionPlane,
                     adsk.core.ValueInput.createByString("C_FrameHeight"))
     plane = planes.add(pin)
     plane.name = prefix + "Plane_CurveGuards"
@@ -714,37 +718,37 @@ def validate_curve_cad(design, comp, p: CurveInput, derived: CurveDerived,
     ax = (bb.maxPoint.x - bb.minPoint.x) * 10.0
     ay = (bb.maxPoint.y - bb.minPoint.y) * 10.0
     az = (bb.maxPoint.z - bb.minPoint.z) * 10.0
-    # Plan extents live in X/Z (Y-up): footprint dims are the two plan axes.
+    # Plan extents live in X/Y (Z-up): footprint dims are the two plan axes.
     # Rail-to-rail end rollers are intentional (curve-module standard for clean
     # handoff): end-roller corners sweep ~d_out/2 past the radial end planes,
     # so the envelope is Ro + d_outer, not Ro. Verified live: 1299 vs Ro=1250
     # with d_out=78.1 (overhang 49 = redistributed end margin + corner sweep).
-    plan = sorted([ax, az])
+    plan = sorted([ax, ay])
     ro = derived.outer_radius_mm
     envelope = ro + p.roller_dia_inner_mm * ro / p.inner_radius_mm + 5.0
     checks.append(("Footprint within Ro+d_out envelope",
                    plan[1] <= envelope and plan[0] <= envelope,
                    f"plan={plan[0]:.0f}x{plan[1]:.0f} vs env={envelope:.0f}"))
     checks.append(("Height within 5mm",
-                   abs(ay - derived.overall_height_mm) <= 5.0 or abs(az - derived.overall_height_mm) <= 5.0,
-                   f"Y={ay:.1f} Z={az:.1f} vs exp H={derived.overall_height_mm:.1f}"))
+                   abs(az - derived.overall_height_mm) <= 5.0,
+                   f"Z={az:.1f} vs exp H={derived.overall_height_mm:.1f}"))
     up = design.userParameters
     try:
         rc = up.itemByName("C_RollerCount")
         rc_min = up.itemByName("C_RollerCountMin")
         lc = up.itemByName("C_LegCount")
-        rc_f = int(round(float(rc.value))) if rc else -1
-        rc_min_f = int(round(float(rc_min.value))) if rc_min else -1
-        lc_f = int(round(float(lc.value))) if lc else -1
+        rc_f = round(float(rc.value)) if rc else -1
+        rc_min_f = round(float(rc_min.value)) if rc_min else -1
+        lc_f = round(float(lc.value)) if lc else -1
         checks.append((
             "RollerCount floor readback",
-            rc_f == int(math.floor((derived.arc_outer_mm - 2 * curve_roller_margin_mm(
-                p.roller_dia_inner_mm)) / p.roller_pitch_outer_mm)) + 1,
+            rc_f == math.floor((derived.arc_outer_mm - 2 * curve_roller_margin_mm(
+                p.roller_dia_inner_mm)) / p.roller_pitch_outer_mm) + 1,
             f"Fusion={rc_f}",
         ))
         checks.append((
             "RollerCountMin readback",
-            rc_min_f == int(math.ceil(p.curve_angle_deg / MAX_ANGULAR_PITCH_DEG)) + 1,
+            rc_min_f == math.ceil(p.curve_angle_deg / MAX_ANGULAR_PITCH_DEG) + 1,
             f"Fusion={rc_min_f}",
         ))
         checks.append(("Canonical count = max(pair)",
@@ -964,7 +968,7 @@ def count_bore_cylinders(comp, rail_body, bore_dia_mm: float = HOLE_BORE_DIA_MM)
         return 0
 
 
-def find_top_face(rail_body, up_axis: str = "y"):
+def find_top_face(rail_body, up_axis: str = "z"):
     """Top planar face of a rail body (max extent along up axis; None ok)."""
     try:
         best, best_val = None, -1e18
@@ -1019,11 +1023,11 @@ def build_curve_holes(comp, p: CurveInput, derived: CurveDerived, prefix: str = 
     for tag, band_c in (("inner", p.inner_radius_mm + RAIL_W / 2.0),
                         ("outer", derived.outer_radius_mm - RAIL_W / 2.0)):
         rail = rail_bodies[tag]
-        face = find_top_face(rail)
+        face = find_top_face(rail, up_axis="z")
         if face is None:
             counts[tag] = 0
             continue
-        topy = face.boundingBox.maxPoint.y
+        topz = face.boundingBox.maxPoint.z
         sk = comp.sketches.add(face)
         sk.name = prefix + "Sketch_CurveHoles_" + tag.capitalize() + "Rail"
         circ = sk.sketchCurves.sketchCircles
@@ -1032,8 +1036,8 @@ def build_curve_holes(comp, p: CurveInput, derived: CurveDerived, prefix: str = 
             frac = (k / (n - 1)) if n > 1 else 0.0
             ang = math.radians(p.curve_angle_deg) * frac
             hx = (band_c / 10.0) * math.cos(ang)
-            hz = (band_c / 10.0) * math.sin(ang)
-            pt2 = sk.modelToSketchSpace(adsk.core.Point3D.create(hx, topy, hz))
+            hy = (band_c / 10.0) * math.sin(ang)
+            pt2 = sk.modelToSketchSpace(adsk.core.Point3D.create(hx, hy, topz))
             circ.addByCenterRadius(pt2, HOLE_BORE_R_CM)
         profs = adsk.core.ObjectCollection.create()
         kept = 0
@@ -1071,7 +1075,7 @@ def verify_curve_holes(holes_inner: int, holes_outer: int,
     ok_out = (n - 2) <= holes_outer <= n
     return {"holes_inner": holes_inner, "holes_outer": holes_outer,
             "expected": n, "inner_ok": ok_in, "outer_ok": ok_out,
-            "all": bool(ok_in and ok_out)}
+            "all": ok_in and ok_out}
 
 
 # ---------------------------------------------------------------------------
@@ -1168,7 +1172,7 @@ def verify_drivetrain_counts(shafts: int, rings: int, derived: CurveDerived) -> 
     ok_s = shafts == derived.roller_count
     ok_r = rings == 2 * derived.roller_count
     return {"shafts": shafts, "rings": rings, "expected_shafts": derived.roller_count,
-            "shafts_ok": ok_s, "rings_ok": ok_r, "all": bool(ok_s and ok_r)}
+            "shafts_ok": ok_s, "rings_ok": ok_r, "all": ok_s and ok_r}
 
 
 def estimate_hardware_masses_kg(p: CurveInput, derived: CurveDerived) -> Dict[str, float]:
@@ -1238,7 +1242,7 @@ def verify_housings(housings: int, bores_dia15: int, derived: CurveDerived) -> D
     ok_b = bores_dia15 == 2 * derived.roller_count
     return {"housings": housings, "bores": bores_dia15,
             "expected_each": 2 * derived.roller_count,
-            "housings_ok": ok_h, "bores_ok": ok_b, "all": bool(ok_h and ok_b)}
+            "housings_ok": ok_h, "bores_ok": ok_b, "all": ok_h and ok_b}
 
 
 def curve_bom_drive(p: CurveInput, derived: CurveDerived) -> Dict[str, int]:
