@@ -69,6 +69,31 @@ class CurveModuleTests(unittest.TestCase):
         self.assertIn("C_RollerCountMin", src)
         self.assertIn('ceil(C_CurveAngle / 5 deg)', src)
 
+    def test_existing_curve_parameters_are_refreshed(self):
+        import fusion_curve_module as m
+
+        class Parameter:
+            def __init__(self, expression):
+                self.expression = expression
+
+        class Parameters:
+            def __init__(self):
+                self.items = {
+                    "C_InnerRadius": Parameter("800 mm"),
+                    "C_CurveAngle": Parameter("90 deg"),
+                }
+
+            def itemByName(self, name):
+                return self.items.get(name)
+
+            def add(self, name, _value, _unit, _comment):
+                self.items[name] = Parameter("created")
+                return self.items[name]
+
+        params = Parameters()
+        m._find_or_add(params, "C_InnerRadius", "1000 mm", "mm")
+        self.assertEqual(params.itemByName("C_InnerRadius").expression, "1000 mm")
+
     def test_hole_stations_follow_angle_and_band_rule(self):
         from fusion_curve_module import curve_hole_stations
         d = derive_curve_configuration(demo_curve())

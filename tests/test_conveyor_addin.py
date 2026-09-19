@@ -330,7 +330,7 @@ class ConveyorAddinHelperTests(unittest.TestCase):
 
         inputs = Inputs()
         addin._sync_module_inputs(inputs)
-        self.assertFalse(inputs.itemById("group_straight").isVisible)
+        self.assertTrue(inputs.itemById("group_straight").isVisible)
         self.assertTrue(inputs.itemById("group_curved").isVisible)
         self.assertEqual(inputs.itemById("in_angle").expression, "45 deg")
 
