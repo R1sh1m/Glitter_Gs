@@ -286,6 +286,54 @@ class ConveyorAddinHelperTests(unittest.TestCase):
         self.assertEqual(inputs.itemById("in_angle").expression, "90.0 deg")
         self.assertEqual(inputs.itemById(addin.MODULE_TYPE_ID).selectedItem.name, "Curved 90° Section")
 
+    def test_module_sync_updates_visibility_and_curve_angle(self):
+        class Item:
+            def __init__(self, name="", selected=False):
+                self.name = name
+                self.isSelected = selected
+                self.expression = "0 deg"
+                self.isVisible = True
+
+        class ListItems:
+            def __init__(self, items):
+                self._items = items
+
+            @property
+            def count(self):
+                return len(self._items)
+
+            def item(self, index):
+                return self._items[index]
+
+        class DropDown:
+            def __init__(self):
+                self.listItems = ListItems([
+                    Item("Straight Section", selected=False),
+                    Item("Curved 45° Section", selected=True),
+                ])
+
+            @property
+            def selectedItem(self):
+                return next(item for item in self.listItems._items if item.isSelected)
+
+        class Inputs:
+            def __init__(self):
+                self.items = {
+                    addin.MODULE_TYPE_ID: DropDown(),
+                    "group_straight": Item(),
+                    "group_curved": Item(),
+                    "in_angle": Item(),
+                }
+
+            def itemById(self, ident):
+                return self.items.get(ident)
+
+        inputs = Inputs()
+        addin._sync_module_inputs(inputs)
+        self.assertFalse(inputs.itemById("group_straight").isVisible)
+        self.assertTrue(inputs.itemById("group_curved").isVisible)
+        self.assertEqual(inputs.itemById("in_angle").expression, "45 deg")
+
 
 if __name__ == "__main__":
     unittest.main()
