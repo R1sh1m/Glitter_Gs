@@ -2624,6 +2624,11 @@ def write_snapshot_compare_page(output_dir: str, records: List[Dict[str, object]
         bom_html_f = bom_f.replace(".csv", ".html")
         if os.path.exists(os.path.join(output_dir, bom_html_f)):
             bom_links += f" · <a href='{html.escape(bom_html_f)}' class='file-link accent'>Interactive Color BOM</a>"
+        guard_tag = (
+            "<span class='swatch-tag' style='border-left: 4px solid #FFD700;'>Guards (#FFD700)</span>"
+            if rec.get("guards") or "guard" in str(rec.get("params_line", "")).lower()
+            else ""
+        )
         cards.append(
             f"<section class='card'><h2>{name} "
             f"<span class='badge {badge_cls}'>{badge}</span></h2>"
@@ -2633,7 +2638,7 @@ def write_snapshot_compare_page(output_dir: str, records: List[Dict[str, object]
             f"<span class='swatch-tag' style='border-left: 4px solid #2B2B2B;'>Side Rails (#2B2B2B)</span>"
             f"<span class='swatch-tag' style='border-left: 4px solid #E0E0E0;'>Rollers (#E0E0E0)</span>"
             f"<span class='swatch-tag' style='border-left: 4px solid #C0C0C0;'>Leg Posts (#C0C0C0)</span>"
-            f"{'<span class=\"swatch-tag\" style=\"border-left: 4px solid #FFD700;\">Guards (#FFD700)</span>' if rec.get('guards') or 'guard' in str(rec.get('params_line', '')).lower() else ''}"
+            f"{guard_tag}"
             f"</div>"
             f"<p class='files'>{bom_links} · <span class='step-file'>{html.escape(step_f)}</span></p></section>")
     page = ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
