@@ -239,6 +239,36 @@ def stage_7_fusion_mcp_contract() -> bool:
         return False
 
 
+PLATFORM_SUITES = [
+    "tests.test_units_strict",
+    "tests.test_serialization",
+    "tests.test_docking_math",
+    "tests.test_regression_legacy",
+    "tests.test_debug_export",
+    "tests.test_graph",
+    "tests.test_manufacturing",
+    "tests.test_intelligence",
+    "tests.test_fusion_commands",
+]
+
+
+def stage_8_platform_tests() -> bool:
+    """Run Conveyor Engineering Automation Platform suites (Phases 0-5)."""
+    print_stage("Stage 8: Automation Platform Tests (units/serial/dock/graph/mfg/AI/panel)")
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite()
+    for name in PLATFORM_SUITES:
+        suite.addTests(loader.loadTestsFromName(name))
+    runner = unittest.TextTestRunner(verbosity=1)
+    res = runner.run(suite)
+    if res.wasSuccessful():
+        print_pass(f"{res.testsRun} platform tests passed")
+        return True
+    else:
+        print_fail(f"{len(res.failures)} failed, {len(res.errors)} errors in platform tests")
+        return False
+
+
 def main():
     print("=" * 65)
     print(f"{BOLD}AUTODESK FUSION 360 PARAMETRIC CI PIPELINE{RESET}")
@@ -253,6 +283,7 @@ def main():
         ("Core Unit Tests", stage_5_unit_tests),
         ("Autodesk Fusion API Integration", stage_6_autodesk_api_integration),
         ("Autodesk Fusion MCP Contract", stage_7_fusion_mcp_contract),
+        ("Automation Platform (Phases 0-5)", stage_8_platform_tests),
     ]
 
     results = []

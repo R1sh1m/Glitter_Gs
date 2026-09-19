@@ -100,6 +100,143 @@ _registered_controls = []
 _last_valid_state: Optional[bool] = None
 _last_valid_msg = ""
 
+# Re-entrancy guard: programmatic .expression/.value writes inside
+# inputChanged re-fire inputChanged. Without a guard the handler can
+# recurse (preset -> sync -> auto-opt -> preview reads of half-written
+# state) and the outer bare-except used to swallow everything, leaving
+# the UI stale. When True the nested event returns immediately.
+_in_input_changed = False
+
+
+# Active dialog inputs registry (ensures instantaneous lookup in multi-tab layouts)
+_active_dialog_inputs: Dict[str, Any] = {}
+
+
+def _register_dialog_input(item):
+    """Register created command input in active lookup cache."""
+    if item is not None:
+        ident = getattr(item, "id", None)
+        if ident:
+            _active_dialog_inputs[ident] = item
+    return item
+
+
+def _find_input(inputs, ident):
+    """Robust input lookup that handles Fusion tabs, groups, and collections.
+
+    Production code nests inputs two levels deep
+    (tab.children -> group.children -> value input). Some Fusion builds
+    and all flat test fakes expose only top-level itemById, so fall back
+    to an active cache lookup, itemById, and cast-aware recursion through
+    tab/group children. Never raises; returns None when not found.
+    """
+    if not ident:
+        return None
+
+    # 1. Fast active dialog cache lookup
+    cached = _active_dialog_inputs.get(ident)
+    if cached is not None:
+        try:
+            if getattr(cached, "id", None) == ident and getattr(cached, "isValid", True):
+                return cached
+        except Exception:
+            _active_dialog_inputs.pop(ident, None)
+
+    if inputs is None:
+        return None
+
+    # 2. Top-level itemById check
+    try:
+        found = inputs.itemById(ident)
+        if found is not None:
+            return found
+    except Exception:
+        pass
+
+    seen = set()
+
+    def _walk(collection):
+        if collection is None or id(collection) in seen:
+            return None
+        seen.add(id(collection))
+
+        # Check itemById directly on the collection if supported
+        try:
+            direct = collection.itemById(ident)
+            if direct is not None:
+                return direct
+        except Exception:
+            pass
+
+        # FakeInputs-style store
+        store = getattr(collection, "_store", None)
+        if isinstance(store, dict):
+            if ident in store:
+                return store[ident]
+            for obj in list(store.values()):
+                children = getattr(obj, "children", None)
+                if children is not None:
+                    hit = _walk(children)
+                    if hit is not None:
+                        return hit
+
+        # Real CommandInputs-style count/item(i)
+        try:
+            count = int(collection.count)
+        except Exception:
+            count = -1
+        if count >= 0:
+            for i in range(count):
+                try:
+                    child = collection.item(i)
+                except Exception:
+                    continue
+                try:
+                    if getattr(child, "id", None) == ident:
+                        return child
+                except Exception:
+                    pass
+
+                # Resolve children for TabCommandInput / GroupCommandInput
+                children = getattr(child, "children", None)
+                if children is None and hasattr(adsk, "core"):
+                    tab_cls = getattr(adsk.core, "TabCommandInput", None)
+                    if tab_cls and hasattr(tab_cls, "cast"):
+                        t_obj = tab_cls.cast(child)
+                        if t_obj:
+                            children = getattr(t_obj, "children", None)
+                    if children is None:
+                        grp_cls = getattr(adsk.core, "GroupCommandInput", None)
+                        if grp_cls and hasattr(grp_cls, "cast"):
+                            g_obj = grp_cls.cast(child)
+                            if g_obj:
+                                children = getattr(g_obj, "children", None)
+
+                if children is not None:
+                    hit = _walk(children)
+                    if hit is not None:
+                        return hit
+        return None
+
+    try:
+        return _walk(inputs)
+    except Exception:
+        return None
+
+
+def _log_dialog_error(context: str, exc: BaseException) -> None:
+    """Best-effort file log for dialog handler failures (never raises)."""
+    try:
+        out_dir = getattr(fcg, "DEFAULT_OUTPUT_DIR", None) or os.path.join(
+            os.path.expanduser("~"), "ConveyorGenerator_Output"
+        )
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, "dialog_errors.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{context}: {exc!r}\n{traceback.format_exc()}\n")
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Presets Helper
 # ---------------------------------------------------------------------------
@@ -172,13 +309,14 @@ def _try_separator(container, sep_id: str) -> None:
 
 def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any]], adsk_mod=None):
     """Build the tabbed command layout with a flat fallback."""
+    _active_dialog_inputs.clear()
     mod = adsk_mod if adsk_mod is not None else adsk
     drop_style = mod.core.DropDownStyles.LabeledIconDropDownStyle
     try:
-        tab_setup = inputs.addTabCommandInput(TAB_SETUP_ID, "Setup")
-        tab_dims = inputs.addTabCommandInput(TAB_DIMS_ID, "Dimensions")
-        tab_capacity = inputs.addTabCommandInput(TAB_CAPACITY_ID, "Capacity & Options")
-        tab_preview = inputs.addTabCommandInput(TAB_PREVIEW_ID, "Preview & Status")
+        tab_setup = _register_dialog_input(inputs.addTabCommandInput(TAB_SETUP_ID, "Setup"))
+        tab_dims = _register_dialog_input(inputs.addTabCommandInput(TAB_DIMS_ID, "Dimensions"))
+        tab_capacity = _register_dialog_input(inputs.addTabCommandInput(TAB_CAPACITY_ID, "Capacity & Options"))
+        tab_preview = _register_dialog_input(inputs.addTabCommandInput(TAB_PREVIEW_ID, "Preview & Status"))
         tabbed = True
         tabs = [tab_setup, tab_dims, tab_capacity, tab_preview]
         setup_inputs = tab_setup.children
@@ -190,14 +328,14 @@ def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any
         tabs = []
         setup_inputs = dims_inputs = capacity_inputs = preview_inputs = inputs
 
-    type_drop = setup_inputs.addDropDownCommandInput(MODULE_TYPE_ID, "Module Type", drop_style)
+    type_drop = _register_dialog_input(setup_inputs.addDropDownCommandInput(MODULE_TYPE_ID, "Module Type", drop_style))
     type_drop.listItems.add("Straight Section", True)
     type_drop.listItems.add("Curved 90° Section", False)
     type_drop.listItems.add("Curved 45° Section", False)
     type_drop.listItems.add("Curved 30° Section", False)
     type_drop.listItems.add("Curved 60° Section", False)
 
-    preset_drop = setup_inputs.addDropDownCommandInput(PRESET_ID, "Preset / Template", drop_style)
+    preset_drop = _register_dialog_input(setup_inputs.addDropDownCommandInput(PRESET_ID, "Preset / Template", drop_style))
     preset_drop.listItems.add("Custom (Manual)", False)
     for name in presets:
         preset_drop.listItems.add(name, name == defaults[PRESET_ID])
@@ -211,30 +349,30 @@ def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any
         pass
     _try_separator(setup_inputs, "sep_setup")
 
-    shared_group = dims_inputs.addGroupCommandInput("group_straight", "Shared Conveyor Dimensions")
+    shared_group = _register_dialog_input(dims_inputs.addGroupCommandInput("group_straight", "Shared Conveyor Dimensions"))
     for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
-        item = shared_group.children.addValueInput(
+        item = _register_dialog_input(shared_group.children.addValueInput(
             spec_id, label, unit,
             mod.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}"),
-        )
+        ))
         item.tooltip = tip
 
     _try_separator(dims_inputs, "sep_dimensions")
-    curved_group = dims_inputs.addGroupCommandInput("group_curved", "Curved Dimensions")
+    curved_group = _register_dialog_input(dims_inputs.addGroupCommandInput("group_curved", "Curved Dimensions"))
     curved_group.isVisible = False
     for spec_id, label, unit, tip in CURVE_SPECS:
-        item = curved_group.children.addValueInput(
+        item = _register_dialog_input(curved_group.children.addValueInput(
             spec_id, label, unit,
             mod.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}"),
-        )
+        ))
         item.tooltip = tip
 
-    capacity_group = capacity_inputs.addGroupCommandInput(
+    capacity_group = _register_dialog_input(capacity_inputs.addGroupCommandInput(
         "group_capacity", "Autonomous Capacity & Duty Sizing"
-    )
-    duty_drop = capacity_group.children.addDropDownCommandInput(
+    ))
+    duty_drop = _register_dialog_input(capacity_group.children.addDropDownCommandInput(
         DUTY_CLASS_ID, "Duty Rating", drop_style
-    )
+    ))
     for name, selected in (
         ("Custom (Manual Specs)", False),
         ("Light Duty (150 kg - Cartons & Totes)", False),
@@ -243,33 +381,33 @@ def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any
         ("Pallet Heavy (2000 kg - Full Pallets)", False),
     ):
         duty_drop.listItems.add(name, selected)
-    capacity_group.children.addStringValueInput(
+    _register_dialog_input(capacity_group.children.addStringValueInput(
         TARGET_LOAD_ID, "Target Payload", f"{defaults[TARGET_LOAD_ID]:.0f} kg"
-    )
-    capacity_group.children.addBoolValueInput(
+    ))
+    _register_dialog_input(capacity_group.children.addBoolValueInput(
         AUTO_OPTIMIZE_ID, "Autonomous On-The-Fly Sizing", True, "",
         defaults[AUTO_OPTIMIZE_ID],
-    )
+    ))
 
-    options_group = capacity_inputs.addGroupCommandInput("group_options", "Options & Accessories")
-    options_group.children.addBoolValueInput(
+    options_group = _register_dialog_input(capacity_inputs.addGroupCommandInput("group_options", "Options & Accessories"))
+    _register_dialog_input(options_group.children.addBoolValueInput(
         GUARDS_ID, "Side Guards", True, "", defaults[GUARDS_ID]
-    )
-    options_group.children.addBoolValueInput(
+    ))
+    _register_dialog_input(options_group.children.addBoolValueInput(
         CROSS_BRACE_ID, "Leg Cross-Struts", True, "", defaults[CROSS_BRACE_ID]
-    )
+    ))
 
-    preview_inputs.addTextBoxCommandInput(
+    _register_dialog_input(preview_inputs.addTextBoxCommandInput(
         PREVIEW_ID, "Live Engineering Preview",
         preview_text(values_to_input(defaults)), PREVIEW_ROWS, True,
-    )
-    preview_inputs.addBoolValueInput(
+    ))
+    _register_dialog_input(preview_inputs.addBoolValueInput(
         EXPORT_BTN_ID, "Export STEP + BOM + OPC-UA on Apply", True, "", True
-    )
+    ))
     _try_separator(preview_inputs, "sep_preview")
-    preview_inputs.addTextBoxCommandInput(
+    _register_dialog_input(preview_inputs.addTextBoxCommandInput(
         LOG_ID, "Status / Export Log", "Ready.", LOG_ROWS, True
-    )
+    ))
 
     return {
         "tabbed": tabbed,
@@ -285,7 +423,7 @@ def _apply_preset_to_inputs(inputs, preset: dict) -> None:
     """Apply a preset dictionary to native Fusion command inputs."""
     module_type = str(preset.get("module_type", "")).lower()
     if module_type:
-        module_input = inputs.itemById(MODULE_TYPE_ID)
+        module_input = _find_input(inputs, MODULE_TYPE_ID)
         if module_input is not None:
             target = "Curved" if module_type == "curve" else "Straight"
             for index in range(module_input.listItems.count):
@@ -294,14 +432,14 @@ def _apply_preset_to_inputs(inputs, preset: dict) -> None:
 
     duty_name = preset.get(DUTY_CLASS_ID)
     if duty_name is not None:
-        duty_input = inputs.itemById(DUTY_CLASS_ID)
+        duty_input = _find_input(inputs, DUTY_CLASS_ID)
         if duty_input is not None:
             for index in range(duty_input.listItems.count):
                 item = duty_input.listItems.item(index)
                 item.isSelected = str(duty_name).lower() in item.name.lower()
 
     for key, value in preset.items():
-        item = inputs.itemById(key)
+        item = _find_input(inputs, key)
         if item is None:
             continue
         if key in (GUARDS_ID, CROSS_BRACE_ID):
@@ -315,12 +453,12 @@ def _apply_preset_to_inputs(inputs, preset: dict) -> None:
 
 def _sync_module_inputs(inputs) -> None:
     """Keep module visibility and curve angle aligned with the module selector."""
-    module_input = inputs.itemById(MODULE_TYPE_ID)
+    module_input = _find_input(inputs, MODULE_TYPE_ID)
     selected = module_input.selectedItem.name if module_input and module_input.selectedItem else "Straight Section"
     is_curve = "Curved" in selected or "Curve" in selected
 
-    straight_group = inputs.itemById("group_straight")
-    curved_group = inputs.itemById("group_curved")
+    straight_group = _find_input(inputs, "group_straight")
+    curved_group = _find_input(inputs, "group_curved")
     if straight_group is not None:
         # Width, height, roller, leg, and guard fields are shared by both
         # module types; keep them visible while the curve-only fields toggle.
@@ -329,7 +467,7 @@ def _sync_module_inputs(inputs) -> None:
         curved_group.isVisible = is_curve
 
     if is_curve:
-        angle_input = inputs.itemById("in_angle")
+        angle_input = _find_input(inputs, "in_angle")
         if angle_input is not None:
             for angle in ("90", "45", "30", "60"):
                 if angle in selected:
@@ -527,45 +665,51 @@ def _read_dialog_values(inputs: "adsk.core.CommandInputs") -> dict:
     units = app.activeProduct.unitsManager
     values = {}
 
-    m_item = inputs.itemById(MODULE_TYPE_ID)
+    m_item = _find_input(inputs, MODULE_TYPE_ID)
     values[MODULE_TYPE_ID] = m_item.selectedItem.name if (m_item and m_item.selectedItem) else "Straight Section"
 
-    p_item = inputs.itemById(PRESET_ID)
+    p_item = _find_input(inputs, PRESET_ID)
     values[PRESET_ID] = p_item.selectedItem.name if (p_item and p_item.selectedItem) else "Custom"
 
+    defaults = dialog_defaults()
+
     for spec_id, _label, _unit, _key, _tip in STRAIGHT_SPECS:
-        item = inputs.itemById(spec_id)
+        item = _find_input(inputs, spec_id)
         if item is not None:
             try:
                 values[spec_id] = _evaluate_to_display_units(units, item.expression, "mm")
             except Exception as exc:
                 raise ValueError(f"{spec_id} ({item.expression!r}): {exc}") from exc
+        elif spec_id not in values:
+            values[spec_id] = float(defaults.get(spec_id, 0.0))
 
     for spec_id, _label, unit, _tip in CURVE_SPECS:
-        item = inputs.itemById(spec_id)
+        item = _find_input(inputs, spec_id)
         if item is not None:
             try:
                 values[spec_id] = _evaluate_to_display_units(units, item.expression, unit)
             except Exception as exc:
                 raise ValueError(f"{spec_id} ({item.expression!r}): {exc}") from exc
+        elif spec_id not in values:
+            values[spec_id] = float(defaults.get(spec_id, 0.0))
 
-    guard_item = inputs.itemById(GUARDS_ID)
+    guard_item = _find_input(inputs, GUARDS_ID)
     values[GUARDS_ID] = bool(guard_item.value) if guard_item else True
 
-    export_item = inputs.itemById(EXPORT_BTN_ID)
+    export_item = _find_input(inputs, EXPORT_BTN_ID)
     # Default True so older dialogs / tests without the checkbox still export.
     values[EXPORT_BTN_ID] = bool(export_item.value) if export_item is not None else True
 
-    brace_item = inputs.itemById(CROSS_BRACE_ID)
+    brace_item = _find_input(inputs, CROSS_BRACE_ID)
     values[CROSS_BRACE_ID] = bool(brace_item.value) if brace_item else True
 
-    auto_item = inputs.itemById(AUTO_OPTIMIZE_ID)
+    auto_item = _find_input(inputs, AUTO_OPTIMIZE_ID)
     values[AUTO_OPTIMIZE_ID] = bool(auto_item.value) if auto_item else False
 
-    duty_item = inputs.itemById(DUTY_CLASS_ID)
+    duty_item = _find_input(inputs, DUTY_CLASS_ID)
     values[DUTY_CLASS_ID] = duty_item.selectedItem.name if (duty_item and duty_item.selectedItem) else "Medium Duty (450 kg)"
 
-    load_item = inputs.itemById(TARGET_LOAD_ID)
+    load_item = _find_input(inputs, TARGET_LOAD_ID)
     if load_item is not None:
         try:
             expr_clean = load_item.value if hasattr(load_item, "value") and isinstance(load_item.value, str) else load_item.expression
@@ -618,13 +762,29 @@ def _export_current(design: "adsk.fusion.Design", refs: dict, values: dict,
 def _workspace_candidates(ui):
     """Return the active workspace first, followed by known Fusion workspaces."""
     candidates = []
-    active = getattr(ui, "activeWorkspace", None)
-    if active is not None:
-        candidates.append(active)
-    for workspace_id in ("FusionSolidEnvironment", "AssemblyEnvironment"):
-        workspace = ui.workspaces.itemById(workspace_id)
-        if workspace is not None and all(workspace is not item for item in candidates):
-            candidates.append(workspace)
+    if ui is None:
+        return candidates
+    try:
+        active = getattr(ui, "activeWorkspace", None)
+        if active is not None:
+            candidates.append(active)
+    except Exception:
+        # Inactive session or teardown: e.g. RuntimeError: 2 : InternalValidationError : pCurrentSession
+        pass
+
+    try:
+        workspaces = getattr(ui, "workspaces", None)
+    except Exception:
+        workspaces = None
+
+    if workspaces is not None:
+        for workspace_id in ("FusionSolidEnvironment", "AssemblyEnvironment"):
+            try:
+                workspace = workspaces.itemById(workspace_id)
+                if workspace is not None and all(workspace is not item for item in candidates):
+                    candidates.append(workspace)
+            except Exception:
+                pass
     return candidates
 
 
@@ -637,10 +797,20 @@ def _panel_candidates(workspace):
         "AssemblyCreatePanel",
     )
     panels = []
-    for panel_id in panel_ids:
-        panel = workspace.toolbarPanels.itemById(panel_id)
-        if panel is not None and all(panel is not item for item in panels):
-            panels.append(panel)
+    if workspace is None:
+        return panels
+    try:
+        tb_panels = getattr(workspace, "toolbarPanels", None)
+    except Exception:
+        tb_panels = None
+    if tb_panels is not None:
+        for panel_id in panel_ids:
+            try:
+                panel = tb_panels.itemById(panel_id)
+                if panel is not None and all(panel is not item for item in panels):
+                    panels.append(panel)
+            except Exception:
+                pass
     return panels
 
 
@@ -649,30 +819,59 @@ def _register_command_controls(ui, cmd_def):
     _registered_controls.clear()
     for workspace in _workspace_candidates(ui):
         for panel in _panel_candidates(workspace):
-            control = panel.controls.itemById(ADDIN_ID)
-            if control is None:
-                control = panel.controls.addCommand(cmd_def, ADDIN_ID)
-            if control is not None:
-                if panel.id.endswith("CreatePanel"):
-                    control.isPromoted = True
-                    control.isPromotedByDefault = True
-                _registered_controls.append((workspace, panel))
+            try:
+                controls = getattr(panel, "controls", None)
+                if controls is None:
+                    continue
+                control = controls.itemById(ADDIN_ID)
+                if control is None:
+                    control = controls.addCommand(cmd_def, ADDIN_ID)
+                if control is not None:
+                    try:
+                        panel_id = getattr(panel, "id", "")
+                        if panel_id and panel_id.endswith("CreatePanel"):
+                            control.isPromoted = True
+                            control.isPromotedByDefault = True
+                    except Exception:
+                        pass
+                    _registered_controls.append((workspace, panel))
+            except Exception:
+                pass
 
 
 def _remove_command_controls(ui):
     """Remove controls from every workspace/panel used during registration."""
+    if ui is None:
+        _registered_controls.clear()
+        return
     panels = []
-    for workspace, registered_panel in _registered_controls:
-        if all(registered_panel is not panel for panel in panels):
-            panels.append(registered_panel)
-    for workspace in _workspace_candidates(ui):
-        for panel in _panel_candidates(workspace):
-            if all(panel is not item for item in panels):
+    for item in _registered_controls:
+        try:
+            panel = item[1] if isinstance(item, (tuple, list)) and len(item) > 1 else item
+            if panel is not None and all(panel is not p for p in panels):
                 panels.append(panel)
+        except Exception:
+            pass
+    try:
+        for workspace in _workspace_candidates(ui):
+            try:
+                for panel in _panel_candidates(workspace):
+                    if all(panel is not p for p in panels):
+                        panels.append(panel)
+            except Exception:
+                pass
+    except Exception:
+        pass
     for panel in panels:
-        control = panel.controls.itemById(ADDIN_ID)
-        if control is not None and control.isValid:
-            control.deleteMe()
+        for cmd_id in (ADDIN_ID, DOCK_CMD_ID):
+            try:
+                controls = getattr(panel, "controls", None)
+                if controls is not None:
+                    control = controls.itemById(cmd_id)
+                    if control is not None and getattr(control, "isValid", False):
+                        control.deleteMe()
+            except Exception:
+                pass
     _registered_controls.clear()
 
 
@@ -714,6 +913,10 @@ def run(context):
                     cmd.validateInputs.add(on_validate)
                     handlers.append(on_validate)
 
+                    on_destroy = ConveyorDestroyHandler()
+                    cmd.destroy.add(on_destroy)
+                    handlers.append(on_destroy)
+
                     inputs = cmd.commandInputs
                     defaults = dialog_defaults()
                     presets = load_presets()
@@ -734,7 +937,7 @@ def run(context):
                             EXPORT_BTN_ID: "When ON, Build/Apply also writes STEP + BOM + OPC-UA files (export runs in Execute, never inside InputChanged, so it cannot crash Fusion).",
                         }
                         for _tip_id, _tip_text in _tips.items():
-                            _tip_item = inputs.itemById(_tip_id)
+                            _tip_item = _find_input(inputs, _tip_id)
                             if _tip_item is not None:
                                 try:
                                     _tip_item.tooltip = _tip_text
@@ -752,11 +955,22 @@ def run(context):
                 super().__init__()
 
             def notify(self, args):
+                global _in_input_changed
+                if _in_input_changed:
+                    return
+                _in_input_changed = True
                 try:
                     inputs = args.inputs
                     changed = args.input
                     if changed is None:
                         return
+
+                    def _auto_enabled() -> bool:
+                        auto_item = _find_input(inputs, AUTO_OPTIMIZE_ID)
+                        try:
+                            return bool(auto_item.value) if auto_item is not None else False
+                        except Exception:
+                            return False
 
                     # Module Type Switch: toggle straight vs curved groups
                     if changed.id == MODULE_TYPE_ID:
@@ -769,15 +983,37 @@ def run(context):
                         if p_name in presets:
                             _apply_preset_to_inputs(inputs, presets[p_name])
                             _sync_module_inputs(inputs)
-                            log = inputs.itemById(LOG_ID)
+                            log = _find_input(inputs, LOG_ID)
                             if log is not None:
-                                log.text = f"Preset applied: {p_name}"
+                                try:
+                                    log.text = f"Preset applied: {p_name}"
+                                except Exception:
+                                    pass
 
                     # Duty Class or Target Load or Auto-Optimize Change
                     elif changed.id in (DUTY_CLASS_ID, TARGET_LOAD_ID, AUTO_OPTIMIZE_ID) or (
-                        changed.id in ("in_length", "in_width", "in_height") and inputs.itemById(AUTO_OPTIMIZE_ID) and bool(inputs.itemById(AUTO_OPTIMIZE_ID).value)
+                        changed.id in ("in_length", "in_width", "in_height") and _auto_enabled()
                     ):
-                        vals = _read_dialog_values(inputs)
+                        try:
+                            vals = _read_dialog_values(inputs)
+                        except Exception as exc:
+                            # Partial typing (e.g. cleared box) must not freeze
+                            # the dialog: surface the bad field and still
+                            # attempt a preview update below.
+                            _log_dialog_error("inputChanged auto-opt read", exc)
+                            log = _find_input(inputs, LOG_ID)
+                            if log is not None:
+                                try:
+                                    log.text = f"Cannot auto-size: {exc}"
+                                except Exception:
+                                    pass
+                            preview_err = _find_input(inputs, PREVIEW_ID)
+                            if preview_err is not None:
+                                try:
+                                    preview_err.text = f"Invalid input: {exc}"
+                                except Exception:
+                                    pass
+                            return
                         duty_name = vals.get(DUTY_CLASS_ID, "Custom")
                         target_l = vals.get(TARGET_LOAD_ID, 450.0)
 
@@ -790,62 +1026,106 @@ def run(context):
                                 target_l = 2000.0
                             elif "Heavy" in duty_name:
                                 target_l = 1000.0
-                            load_inp = inputs.itemById(TARGET_LOAD_ID)
+                            load_inp = _find_input(inputs, TARGET_LOAD_ID)
                             if load_inp:
-                                load_inp.value = f"{target_l:.0f} kg"
+                                try:
+                                    load_inp.value = f"{target_l:.0f} kg"
+                                except Exception as exc:
+                                    _log_dialog_error("inputChanged duty write", exc)
 
-                        auto_on = vals.get(AUTO_OPTIMIZE_ID, False) or changed.id == DUTY_CLASS_ID
-                        if auto_on and "Custom" not in duty_name:
-                            opt = fcg.autonomous_optimize_conveyor(
-                                target_load_kg=target_l,
-                                length_mm=vals["in_length"],
-                                width_mm=vals["in_width"],
-                                height_mm=vals["in_height"],
-                                side_guards=vals[GUARDS_ID],
-                                duty_class=duty_name,
-                            )
-                            for attr, inp_id in (("roller_diameter_mm", "in_dia"),
-                                                 ("roller_spacing_mm", "in_pitch"),
-                                                 ("support_spacing_mm", "in_leg")):
-                                item = inputs.itemById(inp_id)
-                                if item:
-                                    item.expression = f"{getattr(opt, attr):.0f} mm"
-                            brace_item = inputs.itemById(CROSS_BRACE_ID)
-                            if brace_item:
-                                brace_item.value = opt.cross_bracing
+                        auto_on = vals.get(AUTO_OPTIMIZE_ID, False) or (changed.id == DUTY_CLASS_ID and "Custom" not in duty_name)
+                        if auto_on:
+                            opt_duty = "auto" if "Custom" in duty_name else duty_name
+                            try:
+                                opt = fcg.autonomous_optimize_conveyor(
+                                    target_load_kg=target_l,
+                                    length_mm=vals["in_length"],
+                                    width_mm=vals["in_width"],
+                                    height_mm=vals["in_height"],
+                                    side_guards=vals[GUARDS_ID],
+                                    duty_class=opt_duty,
+                                )
+                            except Exception as exc:
+                                _log_dialog_error("inputChanged optimize", exc)
+                                opt = None
+                            if opt is not None:
+                                for attr, inp_id in (("roller_diameter_mm", "in_dia"),
+                                                     ("roller_spacing_mm", "in_pitch"),
+                                                     ("support_spacing_mm", "in_leg")):
+                                    item = _find_input(inputs, inp_id)
+                                    if item:
+                                        try:
+                                            item.expression = f"{getattr(opt, attr):.0f} mm"
+                                        except Exception as exc:
+                                            _log_dialog_error(f"inputChanged write {inp_id}", exc)
+                                brace_item = _find_input(inputs, CROSS_BRACE_ID)
+                                if brace_item:
+                                    try:
+                                        brace_item.value = opt.cross_bracing
+                                    except Exception as exc:
+                                        _log_dialog_error("inputChanged write cross_brace", exc)
 
                     # Export toggle: checkbox only, no heavy work here.
                     # Export itself runs in ConveyorExecuteHandler (Build/Apply),
                     # which is the only safe place for solve + STEP export.
                     elif changed.id == EXPORT_BTN_ID:
-                        log = inputs.itemById(LOG_ID)
-                        state = "ON — files will export on Build/Apply." if bool(changed.value) else "OFF — Build/Apply will only build, no files."
+                        log = _find_input(inputs, LOG_ID)
+                        try:
+                            checked = bool(changed.value)
+                        except Exception:
+                            checked = True
+                        state = "ON — files will export on Build/Apply." if checked else "OFF — Build/Apply will only build, no files."
                         line = f"Export on Apply {state}"
                         if log is not None:
-                            # Replace a previous toggle line instead of spamming.
-                            existing = log.text or ""
-                            lines = [ln for ln in existing.split("\n") if ln and not ln.startswith("Export on Apply") and not ln.startswith("Export deferred")]
-                            lines.append(line)
-                            log.text = "\n".join(lines)
+                            try:
+                                # Replace a previous toggle line instead of spamming.
+                                existing = log.text or ""
+                                lines = [ln for ln in existing.split("\n") if ln and not ln.startswith("Export on Apply") and not ln.startswith("Export deferred")]
+                                lines.append(line)
+                                log.text = "\n".join(lines)
+                            except Exception as exc:
+                                _log_dialog_error("inputChanged export toggle", exc)
                         return
 
-                    # Live preview update
-                    preview = inputs.itemById(PREVIEW_ID)
+                    # Live preview update (always attempted; never leaves stale text)
+                    preview = _find_input(inputs, PREVIEW_ID)
                     if preview is not None:
-                        vals = _read_dialog_values(inputs)
+                        try:
+                            vals = _read_dialog_values(inputs)
+                        except Exception as exc:
+                            _log_dialog_error("inputChanged preview read", exc)
+                            try:
+                                preview.text = f"Invalid input: {exc}"
+                            except Exception:
+                                pass
+                            return
                         mod_type = vals.get(MODULE_TYPE_ID, "Straight Section")
                         if "Curve" in mod_type or "Curved" in mod_type:
                             try:
                                 preview.text = preview_curve_text(values_to_curve_input(vals))
                             except Exception as exc:
-                                preview.text = f"Invalid curve: {exc}"
+                                try:
+                                    preview.text = f"Invalid curve: {exc}"
+                                except Exception:
+                                    pass
                         else:
                             try:
                                 preview.text = preview_text(values_to_input(vals))
                             except Exception as exc:
-                                preview.text = f"Invalid straight: {exc}"
-                except Exception:
-                    pass
+                                try:
+                                    preview.text = f"Invalid straight: {exc}"
+                                except Exception:
+                                    pass
+                except Exception as exc:
+                    _log_dialog_error("inputChanged", exc)
+                    try:
+                        log = _find_input(args.inputs, LOG_ID)
+                        if log is not None:
+                            log.text = f"Dialog update failed: {exc}"
+                    except Exception:
+                        pass
+                finally:
+                    _in_input_changed = False
 
         class ConveyorValidateHandler(adsk.core.ValidateInputsEventHandler):
             def __init__(self):
@@ -865,9 +1145,12 @@ def run(context):
                 except Exception as exc:
                     args.areInputsValid = False
                     status = f"Cannot build: {exc}"
-                log = args.inputs.itemById(LOG_ID)
+                log = _find_input(args.inputs, LOG_ID)
                 if log is not None and status:
-                    log.text = status
+                    try:
+                        log.text = status
+                    except Exception as exc:
+                        _log_dialog_error("validateInputs log", exc)
 
         class ConveyorExecuteHandler(adsk.core.CommandEventHandler):
             def __init__(self):
@@ -933,6 +1216,13 @@ def run(context):
                     if ui:
                         ui.messageBox(f"Conveyor build failed:\n{traceback.format_exc()}")
 
+        class ConveyorDestroyHandler(adsk.core.CommandEventHandler):
+            def __init__(self):
+                super().__init__()
+
+            def notify(self, args):
+                _active_dialog_inputs.clear()
+
         # ---------------------------------------------------------------------------
         # Secondary Docking Command Dialog Handlers (Lego Line Builder)
         # ---------------------------------------------------------------------------
@@ -985,7 +1275,7 @@ def run(context):
                         return
 
                     inputs = args.command.commandInputs
-                    next_item = inputs.itemById("dock_next_type")
+                    next_item = _find_input(inputs, "dock_next_type")
                     sel_text = next_item.selectedItem.name if (next_item and next_item.selectedItem) else "Straight"
 
                     # Find parent conveyor in root occurrences
@@ -1077,21 +1367,26 @@ def run(context):
             handlers.append(on_dock_created)
 
         # Mount into Solid Workspaces
-        workspace = ui.workspaces.itemById("FusionSolidEnvironment")
-        if workspace:
-            panel = workspace.toolbarPanels.itemById("SolidScriptsAddinsPanel")
-            if panel and panel.controls.itemById(ADDIN_ID) is None:
-                panel.controls.addCommand(cmd_def, ADDIN_ID)
+        try:
+            workspaces = getattr(ui, "workspaces", None)
+            workspace = workspaces.itemById("FusionSolidEnvironment") if workspaces else None
+            if workspace:
+                tb_panels = getattr(workspace, "toolbarPanels", None)
+                panel = tb_panels.itemById("SolidScriptsAddinsPanel") if tb_panels else None
+                if panel and getattr(panel, "controls", None) and panel.controls.itemById(ADDIN_ID) is None:
+                    panel.controls.addCommand(cmd_def, ADDIN_ID)
 
-            create_panel = workspace.toolbarPanels.itemById("SolidCreatePanel")
-            if create_panel:
-                if create_panel.controls.itemById(ADDIN_ID) is None:
-                    c_ctrl = create_panel.controls.addCommand(cmd_def, ADDIN_ID)
-                    c_ctrl.isPromoted = True
-                    c_ctrl.isPromotedByDefault = True
-                if create_panel.controls.itemById(DOCK_CMD_ID) is None:
-                    d_ctrl = create_panel.controls.addCommand(dock_def, DOCK_CMD_ID)
-                    d_ctrl.isPromoted = True
+                create_panel = tb_panels.itemById("SolidCreatePanel") if tb_panels else None
+                if create_panel and getattr(create_panel, "controls", None):
+                    if create_panel.controls.itemById(ADDIN_ID) is None:
+                        c_ctrl = create_panel.controls.addCommand(cmd_def, ADDIN_ID)
+                        c_ctrl.isPromoted = True
+                        c_ctrl.isPromotedByDefault = True
+                    if create_panel.controls.itemById(DOCK_CMD_ID) is None:
+                        d_ctrl = create_panel.controls.addCommand(dock_def, DOCK_CMD_ID)
+                        d_ctrl.isPromoted = True
+        except Exception:
+            pass
 
     except Exception:
         if ui:
@@ -1119,7 +1414,11 @@ def stop(context):
         if ui is None:
             handlers.clear()
             return
-        _remove_command_controls(ui)
+
+        try:
+            _remove_command_controls(ui)
+        except Exception:
+            pass
 
         try:
             cmd_defs = ui.commandDefinitions
@@ -1139,8 +1438,10 @@ def stop(context):
                         pass
     except Exception:
         try:
-            if ui:
-                ui.messageBox(f"Conveyor add-in stop failed:\n{traceback.format_exc()}")
+            err_str = traceback.format_exc()
+            if "pCurrentSession" not in err_str and "InternalValidationError" not in err_str:
+                if ui:
+                    ui.messageBox(f"Conveyor add-in stop failed:\n{err_str}")
         except Exception:
             pass
     finally:

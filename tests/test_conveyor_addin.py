@@ -334,6 +334,159 @@ class ConveyorAddinHelperTests(unittest.TestCase):
         self.assertTrue(inputs.itemById("group_curved").isVisible)
         self.assertEqual(inputs.itemById("in_angle").expression, "45 deg")
 
+    def test_workspace_candidates_handles_runtime_error_pCurrentSession(self):
+        """Regression: ui.activeWorkspace raises RuntimeError on session teardown."""
+        class MockWorkspaces:
+            def itemById(self, id_):
+                return f"Workspace_{id_}"
+
+        class MockUI:
+            @property
+            def activeWorkspace(self):
+                raise RuntimeError("2 : InternalValidationError : pCurrentSession")
+
+            workspaces = MockWorkspaces()
+
+        ui = MockUI()
+        candidates = addin._workspace_candidates(ui)
+        self.assertIn("Workspace_FusionSolidEnvironment", candidates)
+        self.assertIn("Workspace_AssemblyEnvironment", candidates)
+
+    def test_remove_command_controls_handles_runtime_error_pCurrentSession(self):
+        """Controls removal should safely tolerate session validation errors."""
+        class MockControl:
+            def __init__(self):
+                self.isValid = True
+                self.deleted = False
+
+            def deleteMe(self):
+                self.deleted = True
+
+        ctrl = MockControl()
+
+        class MockControls:
+            def itemById(self, id_):
+                if id_ in (addin.ADDIN_ID, addin.DOCK_CMD_ID):
+                    return ctrl
+                return None
+
+        class MockPanel:
+            id = "SolidCreatePanel"
+            controls = MockControls()
+
+        class MockWorkspace:
+            class ToolbarPanels:
+                def itemById(self, id_):
+                    return MockPanel()
+            toolbarPanels = ToolbarPanels()
+
+        class MockWorkspaces:
+            def itemById(self, id_):
+                return MockWorkspace()
+
+        class MockUI:
+            @property
+            def activeWorkspace(self):
+                raise RuntimeError("2 : InternalValidationError : pCurrentSession")
+
+            workspaces = MockWorkspaces()
+
+        ui = MockUI()
+        addin._registered_controls = [(MockWorkspace(), MockPanel())]
+        addin._remove_command_controls(ui)
+        self.assertTrue(ctrl.deleted)
+        self.assertEqual(len(addin._registered_controls), 0)
+
+    def test_stop_handles_session_teardown_cleanly(self):
+        """stop() must not crash or throw unhandled exceptions during Fusion session teardown."""
+        class MockUI:
+            @property
+            def activeWorkspace(self):
+                raise RuntimeError("2 : InternalValidationError : pCurrentSession")
+
+            workspaces = None
+            commandDefinitions = None
+
+            def messageBox(self, msg):
+                raise AssertionError(f"messageBox should not be called: {msg}")
+
+        class MockApp:
+            userInterface = MockUI()
+
+            @staticmethod
+            def get():
+                return MockApp()
+
+        class FakeCore:
+            Application = MockApp
+
+        class FakeAdsk:
+            core = FakeCore()
+
+        orig_has_adsk = addin._HAS_ADSK
+        orig_adsk = addin.adsk
+        try:
+            addin._HAS_ADSK = True
+            addin.adsk = FakeAdsk()
+            addin.handlers.append("dummy_handler")
+            addin.stop(None)
+            self.assertEqual(len(addin.handlers), 0)
+        finally:
+            addin._HAS_ADSK = orig_has_adsk
+            addin.adsk = orig_adsk
+
+    def test_find_input_nested_tabs_and_groups_and_cache(self):
+        """Verify _find_input resolves nested inputs in Tab -> Group -> Input hierarchy."""
+        class MockItem:
+            def __init__(self, ident):
+                self.id = ident
+                self.isValid = True
+
+        class MockCollection:
+            def __init__(self, items=None):
+                self._items = list(items or [])
+
+            @property
+            def count(self):
+                return len(self._items)
+
+            def item(self, i):
+                return self._items[i]
+
+            def itemById(self, ident):
+                for it in self._items:
+                    if getattr(it, "id", None) == ident:
+                        return it
+                return None
+
+        class MockTab:
+            def __init__(self, ident, children_coll):
+                self.id = ident
+                self.children = children_coll
+
+        class MockGroup:
+            def __init__(self, ident, children_coll):
+                self.id = ident
+                self.children = children_coll
+
+        # Build hierarchy: root inputs -> Tab 'tab_dims' -> Group 'group_straight' -> Item 'in_length'
+        length_item = MockItem("in_length")
+        group_straight = MockGroup("group_straight", MockCollection([length_item]))
+        tab_dims = MockTab("tab_dims", MockCollection([group_straight]))
+        root_inputs = MockCollection([tab_dims])
+
+        # Test recursive walk (cache empty)
+        addin._active_dialog_inputs.clear()
+        found = addin._find_input(root_inputs, "in_length")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, "in_length")
+
+        # Test cache registration
+        addin._register_dialog_input(length_item)
+        cached_found = addin._find_input(None, "in_length")
+        self.assertIs(cached_found, length_item)
+        addin._active_dialog_inputs.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

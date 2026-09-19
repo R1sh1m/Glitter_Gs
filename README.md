@@ -1,197 +1,202 @@
-# Glitter_Gs — Parametric Adjustable Roller Conveyor Generator
-### Autodesk Fusion × Standards: Industry Hackathon (Problem Statement A)
+# Roller Conveyor Engineering Automation Platform
 
-A production-grade Autodesk Fusion API solution that generates and parametrically controls an **Adjustable Roller Conveyor Module** satisfying all requirements from Problem Statement A (sections 2.1 – 2.6).
+![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![Platform](https://img.shields.io/badge/Fusion_360-2026_COM-lightgrey)
+![OS](https://img.shields.io/badge/OS-Windows_%7C_macOS-green)
+![Tests](https://img.shields.io/badge/pytest-130%2B_passing-brightgreen)
+![Local](https://img.shields.io/badge/network-100%25_local-orange)
 
----
+A companion engineering tool for Autodesk Fusion 360 that designs, docks,
+validates, and documents industrial roller conveyor lines — from a single
+parametric module to a fully docked factory layout with fabrication BOM,
+cut lists, and assembly instructions.
 
-## 🎯 Engineering Mission: Standardisation, Quality Control & Safety Benchmarks
-
-Modern global supply chains, e-commerce fulfillment hubs, and manufacturing plants depend on automated material handling systems operating seamlessly 24/7. In engineering and daily life:
-- **Standardisation** enables global interoperability and rapid parts interchangeability (DIN 625 bearings, CEMA 400 roller standards, EN 12020 aluminum extrusions, and IEC 62541 OPC-UA digital twins).
-- **Quality Control** ensures automated CAD B-Rep metrology ($\pm 5.0\text{ mm}$ physical bounding box gate), sketch hygiene, and model-driven BOM derivation that prevents silent geometry drift before manufacturing.
-- **Safety Benchmarks** safeguard human operators and package integrity through ISO 13857 pinch-point guarding, Damon/Interroll $\le 5.0^\circ$ kinematic taper limits, and joint pitch continuity verification.
-
-*See [`Docs/STANDARDS.md`](file:///Docs/STANDARDS.md) for the complete standards index, normative references, and industrial engineering philosophy.*
-
----
-
-## 📋 Implemented Scope
-- **User-driven configuration input** through Fusion UI / Add-In dialog:
-  - `length_mm` (L): 800–2000 mm
-  - `width_mm` (W): 300–600 mm
-  - `height_mm` (H): 500–900 mm
-  - `roller_diameter_mm` (D): 40–80 mm
-  - `roller_spacing_mm` (P): 80–150 mm
-  - `support_spacing_mm` (S): 500–1000 mm
-  - `side_guard_height_mm` (G): 0–150 mm
-  - `side_guards`: Yes/No
-- **Curved conveyor module** (30°, 45°, 60°, 90°) with tapered speed-matched rollers.
-- **Multi-module 3D kinematic docking** with pitch continuity and port alignment verification.
-- **Industry 4.0 Digital Twin**: Automatic OPC-UA IEC 62541 NodeSet metadata export.
-- **Automated generation** of frame side rails, rollers, support legs, and optional side guards.
-- **Repeated component logic** with dynamic Fusion formula parameters.
-- **Deterministic output & idempotent in-place regeneration**.
-- **Automated physical CAD B-Rep verification** (bounding box within 5mm tolerance).
-- **Automated deliverables & export pipeline**: STEP 3D CAD files + CSV Bills of Materials (BOM) with measured physical masses.
-- **Interactive Add-In & Batch Demonstration Pipeline**.
-
-## 🌟 Key Innovations & Salient Architectural Features
-
-1. **Genuine Native Parametric CAD Modeling (Section 2.4)**
-   - Unlike static B-rep solid generators, the CAD model is **fully driven by native Autodesk Fusion User Parameters** (`ConvLength`, `ConvWidth`, `FrameHeight`, `RollerDia`, `RollerSpacing`, `LegSpacing`, `GuardHeight`).
-   - Every sketch line and extrusion dimension is parametrically tied via `.parameter.expression`.
-
-2. **Dynamic Fusion Formula Parameters for Repeated Components (Section 2.3A)**
-   - Roller and leg counts are **not hardcoded in Python loops**; they are registered as Fusion formula parameters:
-     - `RollerCount = floor((ConvLength - 2 * RollerMargin) / RollerSpacing) + 1`
-     - `LegCount = floor((ConvLength - LegSide) / LegSpacing) + 1`
-   - When any parameter is changed directly in Fusion's *Modify -> Change Parameters* table or through the API, Fusion's internal constraint solver automatically recalculates component counts and locations!
-
-3. **Parametric Rectangular Patterns (`RectangularPatternFeature`)**
-   - Single master roller and master leg station patterned along the conveyor axis.
-   - Pattern instance quantities and spacings are directly wired to the formula parameters (`RollerCount`, `RollerSpacing`, `LegCount`, `LegSpacing`).
-
-4. **Zero Duplicate Geometry & In-Place Reconfiguration**
-   - Parameter updates do not delete or recreate parts; geometry updates in-place via `design.computeAll()`, preserving timeline integrity and performance.
-   - Side guards are built once and toggled parametrically via feature suppression (`feature.isSuppressed = not side_guards`).
-
-5. **Physical CAD B-Rep Bounding Box Verification (Section 2.4)**
-   - Automated inspection reads the physical 3D bounding box (`comp.boundingBox.maxPoint - comp.boundingBox.minPoint`) and verifies that real CAD extents ($L, W, H$) match input specifications within 5mm tolerance.
-
-6. **Automated Deliverables & Export Pipeline (Section 2.6)**
-   - Exports high-precision **STEP 3D CAD files** (`.step`) for each configuration **only when validation passes** (failed CAD is never shipped).
-   - Generates formatted **CSV Bills of Materials (BOM)** (`{name}_BOM.csv`) with quantities read back from the Fusion model (`RollerCount`/`LegCount`), so BOM can never drift from CAD, plus a **Mass (kg)** column — measured from `physicalProperties` in-Fusion, analytic solid-steel estimate offline.
-   - Pre-export **hygiene gate** removes empty sketches (logged) before validation/export.
-   - Generates a verification report (`validation_report.txt`, overwritten per batch run).
-
-7. **Dual-Mode Fusion User Interface (Section 2.3)**
-   - **Mode [1] — Automated 3-Configuration Demonstration Pipeline:**
-     Automatically cycles through three substantially different valid configurations (`C1_compact_no_guards`, `C2_medium_with_guards`, `C3_long_with_guards`), validates CAD bounding boxes, exports STEP models (on PASS), and generates CSV BOMs. On Fusion 2026 builds a Configurations-table sync note is recorded; sequential exports remain authoritative on all versions.
-   - **Mode [2] — Interactive Custom Parameter Entry:**
-     Allows real-time input of custom parameters with automatic boundary validation and instant CAD model reconfiguration.
-
-8. **Offline Testability & CI/CD Support**
-   - Pure-Python mathematical models and rule verifications run completely outside of Fusion 360, enabling automated unit testing without CAD dependencies.
+Deterministic engineering calculations govern every output. The optional
+recommendation layer proposes specifications only; it never generates CAD.
 
 ---
 
-## 📐 Specification Input Ranges
+## Capabilities
 
-| Parameter | Symbol | Allowed Range | Default / Demo Example |
-| :--- | :---: | :---: | :---: |
-| **Conveyor Length** | `L` | 800 – 2000 mm | 1400 mm |
-| **Conveyor Width** | `W` | 300 – 600 mm | 450 mm |
-| **Frame Height** | `H` | 500 – 900 mm | 750 mm |
-| **Roller Diameter** | `D` | 40 – 80 mm | 60 mm |
-| **Roller Spacing (c-to-c)** | `P` | 80 – 150 mm | 110 mm |
-| **Support-Leg Spacing** | `S` | 500 – 1000 mm | 700 mm |
-| **Side-Guard Height** | `G` | 0 – 150 mm | 100 mm |
-| **Side Guards** | — | Yes / No | Yes |
+**Parametric module generation**
+
+- Straight modules driven entirely by native Fusion user parameters
+  (`ConvLength`, `ConvWidth`, `FrameHeight`, `RollerDia`, `RollerSpacing`,
+  `LegSpacing`, `GuardHeight`); roller and leg counts are Fusion formula
+  parameters, so editing values in *Modify → Change Parameters* reconfigures
+  the model in place via `computeAll()` — no rebuilds.
+- Tapered curve modules (15–180°) with surface-speed-matched rollers
+  (`d_outer = d_inner · Ro/Ri`) and a 5° adjacent-roller angular cap.
+- Merge, Transfer, Incline, and Custom module types with formal port geometry.
+
+**6-DOF docking solver**
+
+- Every module exposes intelligent inlet/outlet ports (origin, flow
+  direction, lateral axis, up vector, width, carry height, pitch).
+- The solver computes the rigid transform (rotation matrix, quaternion,
+  translation) aligning any outlet to any inlet, including incline grades
+  the legacy yaw-only method could not represent.
+- Engineering gates verify carry-height agreement (±1.0 mm, with riser
+  correction sizing on failure), width agreement, pitch continuity, and
+  footprint collision. Failures return the cause and the required fix.
+
+**Layout graph**
+
+- `ConveyorGraph` models the factory line: modules as nodes, docking joints
+  as edges. Operations: `add_module`, `remove_module`, `connect_modules`,
+  `validate_layout`, `generate_assembly` (world transforms, joint record,
+  rolled-up BOM, validation snapshot).
+
+**Manufacturing output**
+
+- Fabrication BOM (frame extrusion in metres; rollers, shafts, and 6002
+  bearings in pieces), saw cut lists, ordered assembly instructions, and a
+  combined shop-floor report (JSON, Markdown, CSV).
+
+**Digital twin**
+
+- OPC-UA (IEC 62541) NodeSet metadata per module: drive commands, telemetry,
+  photoeye states, rated capacity, and safety factor.
+
+**Verification**
+
+- Physical CAD B-Rep bounding-box gate (±5.0 mm), pre-export sketch hygiene,
+  STEP export gated on validation pass, and a Fusion-independent test suite
+  covering all docking mathematics before any geometry is built.
 
 ---
 
-## 📂 Project Structure
+## Repository layout
 
 ```
-├── fusion_conveyor_generator.py   # Primary Fusion API script & core engine (straight, spec-only)
-├── fusion_curve_module.py         # Curved module (peer): tapered revolve + circular pattern,
-│                                  # C_* params, load advisory, layout-manager ports
+├── fusion_conveyor_generator.py   # Straight-module engine (proven, adapter-wrapped)
+├── fusion_curve_module.py         # Tapered-curve engine (proven, adapter-wrapped)
+├── fusion_docking_system.py       # Legacy yaw-only docking (superseded by docking/solver.py)
 ├── conveyor_addin/
-│   ├── conveyor_addin.manifest    # Add-in manifest (Fusion Add-Ins folder)
-│   └── conveyor_addin.py          # Persistent dialog: typed inputs, live preview,
-│                                  # Export button + log, model reuse (same engine)
-├── tests/
-│   └── test_conveyor_generator.py # Unit suite: derivation, BOM, CSV, floor-pitch sync (offline)
-│   └── test_curve_module.py       # Curve math, taper kinematics, advisory, formula idioms (offline)
-│   └── test_fusion_api_mock.py    # Mocked Fusion-API integration: params, tree, validation, STEP
-│   └── test_conveyor_addin.py     # Add-in dialog helpers (offline)
-├── Docs/
-│   ├── Hackathon_Problem_Statement.pdf
-│   ├── FUSION_API_REFERENCE.md    # Shared Fusion API reference + code map
-│   └── FUSION_SCRIPT_WORKFLOW.md (+.pdf)  # Workflow explainer
-└── README.md                      # Engineering documentation
+│   ├── core/                      # Single source of truth: units, frames, tolerances,
+│   │                              # errors, parameter ranges, serialization/migration
+│   ├── docking/                   # Port model, compatibility matrix, 6-DOF solver,
+│   │                              # validators, debug export, Fusion occurrence applier
+│   ├── graph/                     # ConveyorGraph layout model
+│   ├── modules/                   # Intelligent module factories (adapters + new types)
+│   ├── manufacturing/             # BOM, cut lists, instructions, reports
+│   ├── intelligence/              # Recommend-only layer: knowledge base, rules engine,
+│   │                              # optimizer, recommender (no CAD access by construction)
+│   ├── fusion/                    # Generator adapters, viewport overlay specs,
+│   │                              # Conveyor Intelligence panel actions
+│   ├── conveyor_addin.py          # Persistent Fusion dialog (live preview, export)
+│   └── presets.json               # Standard module presets
+├── examples/
+│   └── build_demo_line.py         # End-to-end demo: Straight 2000 + Curve 90° + Straight 3000
+├── tests/                         # Offline suites incl. docking-math gate and fixtures
+├── out/demo_line/                 # Generated demo deliverables (assembly, BOM, report)
+└── Docs/                          # Normative engineering documentation (see below)
 ```
 
 ---
 
-## 🛠️ Local Dev Setup (no stubs)
+## Quick start
 
-- Python **3.14** venv pinned to match Fusion 2026's embedded runtime:
-  ```bash
-  "C:\Users\Rishi Misra\AppData\Local\Programs\Python\Python314\python.exe" -m venv .venv
-  .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-  ```
-- VSCode uses Pylance with `diagnosticMode: openFilesOnly`, `FusionMCPSample/**` excluded. No `adsk` stubs are vendored (they only exist inside Fusion); `adsk.*` intelligence intentionally comes from Fusion's **Scripts and Add-Ins → Edit** bridge, not local LSP. Pure-Python (derive/verify/BOM/tests) has full LSP support.
+### In Fusion 360 — Add-In (recommended)
 
-## 📏 Engineering Assumptions (Definition of Done)
+1. Place the `conveyor_addin/` folder together with
+   `fusion_conveyor_generator.py` in the Add-Ins directory
+   (`%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` on Windows).
+2. Under **Scripts and Add-Ins → Add-Ins**, start `conveyor_addin`
+   (enable *Run on Startup* to keep it).
+3. Use the toolbar command: typed millimetre inputs with live preview
+   (counts, mass, rated load), one-click STEP + BOM export, and in-place
+   reconfiguration of the existing model.
 
-> Non-code engineering lives in `Docs/` — this section is an index, not the
-> source. Source of truth: `Docs/ENGINEERING.md` (sizing, taper theory,
-> advisory rules), `Docs/INTEGRATION.md` (holes, shafts, drives, docking
-> IF-gates), `Docs/STANDARDS.md` (normative index), `Docs/VISION_PRODUCTION_LINES.md`
-> (interlockable-system roadmap). Key facts: `RollerMargin = D/2+10`,
-> fixed-pitch floor counts, inside-envelope legs, suppression-based guards,
-> rail `20×40` / clearance `10` / post `40×40` / guard `5`, solid-steel mass
-> assumption — all detailed and sourced in `Docs/ENGINEERING.md`.
+### In Fusion 360 — Script
 
-## 🌀 Curved Module (Full Tapered, Modules-First)
+1. **Utilities → Scripts and Add-Ins** (or `Shift + S`), add
+   `fusion_conveyor_generator.py` under *My Scripts*, and run it.
+2. Choose the automated multi-configuration pipeline or interactive
+   custom-parameter entry.
 
-- **Kinematics:** `d_outer = d_inner · Ro/Ri` (surface-speed match); frustum verified live (`Cone` face, analytic volume 1277.6 vs measured 1277.2 cm³).
-- **Counts:** outer-arc floor pitch + 5° angular cap → canonical `N = max(floor, ceil(Θ/5)+1)`; demo 90°/Ri800/W450/P110 → **19 rollers @ 5.0°**, 3 leg stations.
-- **Fusion idioms (live-proven):** trapezoid sketch → `revolveFeatures` 360° → `circularPatternFeatures` about curve-center axis; arc rails/guards as annular-sector sketches → one-sided extrudes; legs radial-patterned; guards via `isSuppressed`. Angles unit-strip with `/ 1 rad`; `pi` and `max()` are **not** available — canonical max lives in Python, Fusion carries both operands (`C_RollerCount`/`C_RollerCountMin`, read back live).
-- **Inputs:** spec-only core untouched; `calculate_load_advisory(box_mass, box_len, box_wid)` suggests P/D/S/W (P≤L/3, W=box+100) clamped to spec ranges.
-- **Deliverables:** `~/ConveyorGenerator_Output/Curve90_Ri800.step` + `Curve90_Ri800_BOM.csv` (7/7 live checks PASS, STEP gated on PASS).
-- **P1–P5 hardware (live in CAD, 105 bodies):** 36 rail seat bores dia16
-  (IF-010), hollow tubes + 19 dia14 shafts + 38 bearing rings (IF-020),
-  motor bay with tension slots + motor/pulley (IF-030/031 v0), 6 foot
-  plates + 24 anchors, sensor bracket with bore (IF-040/051), 4 dock
-  boards + 8 pin bores (IF-060 partial). Full BOM: `Curve90_Full_BOM.csv`,
-  full STEP: `Curve90_Full.step`.
+### Offline — demo line (no Fusion required)
 
-## 📖 Docs (all non-code knowledge lives here — start here, not in code comments)
-
-- `Docs/ENGINEERING.md` — sizing math, taper theory, advisory rules, assumptions ledger.
-- `Docs/INTEGRATION.md` — reference-model teardown, floating-roller gaps, IF-010…IF-060 interface gates.
-- `Docs/STANDARDS.md` — index of `Docs/standards/` downloads + normative pointers (CEMA/ISO/IEC).
-- `Docs/SIMULATION.md` — no sim API on this build; greedy analytic loop + manual study recipes.
-- `Docs/ASSEMBLY.md` — Part-vs-Assembly rules, addExistingComponent flow, requested docs.
-- `Docs/VISION_PRODUCTION_LINES.md` — interlockable Lego-style roadmap to production lines.
-- `Docs/reference models/` — measured Poly-V conveyor STEP + photos (teardown evidence).
-- `Docs/standards/` — Interroll/Damon/Inbelts sources (committed, offline-readable).
-- `Docs/FUSION_SCRIPT_WORKFLOW.md` (+ `.pdf`) — fundamental explainer: how the Python script talks to Fusion, stage by stage.
-- `Docs/FUSION_API_REFERENCE.md` — authoritative API detail (§§1–14), GitHub reuse catalog (§15), integration log (§16).
-
-## 📚 Reusable GitHub Patterns Applied
-
-Patterns studied from [`AutodeskFusion360`](https://github.com/AutodeskFusion360) (34 repos) and applied as idioms (nothing vendored): `SpurGear` parametric skeleton + `isComputeDeferred` discipline, `ParameterIO_Python` CSV↔params retry ordering, `SketchRepair`/`SketchChecker_Python` pre-extrude gates, `BulkExportSketchesAsDXF` stay-open export dialog/log discipline, `Fusion360DevTools` cProfile workflow, `FusionMCPSample` thread-safe `execute_api_script` + screenshot verification loop.
-
----
-
-## 🚀 How to Run
-
-### In Autodesk Fusion 360 (Script)
-
-1. Open Autodesk Fusion.
-2. Navigate to **Utilities** → **Scripts and Add-Ins** (or press `Shift + S`).
-3. Click the **+** (Add) button under *My Scripts* and select `fusion_conveyor_generator.py`.
-4. Click **Run**.
-5. Select:
-   - **`1`** for the **Automated 3-Configuration Demo Pipeline** (exports all deliverables to `~/ConveyorGenerator_Output/`).
-   - **`2`** for **Interactive Custom Configuration** (enter custom comma-separated values).
-
-### In Autodesk Fusion 360 (Add-in, persistent dialog)
-
-1. Copy the `conveyor_addin/` folder **and** `fusion_conveyor_generator.py` so both live side by side, then place the folder in the Add-Ins directory (`%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` on Windows). After any root-engine edit, refresh `conveyor_addin/fusion_conveyor_generator.py` as a byte-copy (tests import the copy).
-2. Under **Scripts and Add-Ins → Add-Ins**, run `conveyor_addin` (enable *Run on Startup* to keep it).
-3. Use the toolbar command: typed mm inputs with a **live preview** (counts + est. mass), **Export STEP + BOM Now** without closing, and Apply & Close to reconfigure in place (existing model reused, never rebuilt).
-
-### Batch outputs (per run, `~/ConveyorGenerator_Output/`)
-
-`{C1,C2,C3}[_Custom]*.step` (on PASS) · `{…}_BOM.csv` (model counts + mass) · `validation_report.txt` · `snapshots.csv` + `comparer.html` (viewport PNGs when run inside Fusion) · per-config browser labels with best-effort guard-face etch.
-
-### Standalone Unit Tests (Outside Fusion)
 ```bash
-.\.venv\Scripts\python.exe -m unittest tests.test_conveyor_generator tests.test_fusion_api_mock -v
+python examples/build_demo_line.py
 ```
-All 37 tests validate mathematical derivations, floor-pitch CAD↔BOM sync, guard independence, range bounds, deterministic signatures, BOM generation (including model-read BOM), CSV exports, mocked param/tree/validation/STEP integration, and curve taper/advisory/formula idioms.
+
+Docks Straight 2000 mm + 90° curve (Ri 800) + Straight 3000 mm, validates
+both joints, and writes `out/demo_line/`: assembly description
+(`demo_line_assembly.json`), fabrication BOM and cut list (CSV), the
+manufacturing report (JSON + Markdown), and per-joint transform debug files.
+
+### Offline — tests
+
+```bash
+python -m pytest tests/ -q
+python run_ci.py     # full pipeline: syntax, AST, lint, types, all suites
+```
+
+---
+
+## Design envelope
+
+| Parameter | Symbol | Range | Typical |
+| :--- | :---: | :---: | :---: |
+| Conveyor length | `L` | 800 – 2000 mm | 1400 mm |
+| Conveyor width | `W` | 300 – 600 mm | 450 mm |
+| Frame height | `H` | 500 – 900 mm | 750 mm |
+| Roller diameter | `D` | 40 – 80 mm | 60 mm |
+| Roller spacing (c-to-c) | `P` | 80 – 150 mm | 110 mm |
+| Support-leg spacing | `S` | 500 – 1000 mm | 700 mm |
+| Side-guard height | `G` | 0 – 150 mm | 100 mm |
+| Side guards | — | Yes / No | Yes |
+
+Key relations: roller end margin `D/2 + 10`; fixed-pitch floor counts
+(`RollerCount`, `LegCount` as Fusion formulas); curve pitch cap 5°;
+joint acceptance carry ±1.0 mm, pitch step within the slack band.
+Full derivations: `Docs/ENGINEERING.md`.
+
+---
+
+## Documentation
+
+All non-code engineering knowledge lives in `Docs/`; code implements it and
+never redefines it. Start here, not in code comments.
+
+- `Docs/COORDINATE_SYSTEM.md` — normative frames, port definitions, unit
+  boundaries, and transform conventions (single source of truth).
+- `Docs/PLATFORM_PHASES.md` — graph, manufacturing, intelligence, and
+  Fusion panel guide with the demo-line outputs.
+- `Docs/ENGINEERING.md` — sizing math, taper theory, advisory rules,
+  assumptions ledger.
+- `Docs/INTEGRATION.md` — hardware interface gates IF-010…IF-060
+  (rail bores, roller assemblies, drives, supports, sensors, docking).
+- `Docs/STANDARDS.md` — normative index (CEMA, ISO, IEC) with committed
+  source material under `Docs/standards/`.
+- `Docs/ASSEMBLY.md` — one-module-per-document rule and the
+  `addExistingComponent` assembly flow.
+- `Docs/SIMULATION.md` — analytic capacity loop and manual study recipes.
+- `Docs/VISION_PRODUCTION_LINES.md` — roadmap from modules to
+  interlockable production lines.
+- `Docs/FUSION_API_REFERENCE.md`, `Docs/FUSION_SCRIPT_WORKFLOW.md` —
+  Fusion API detail and the script-to-CAD execution flow.
+
+---
+
+## Quality gates and conventions
+
+1. **One source of truth** — dimensions, ranges, and tolerances live in
+   `conveyor_addin/core/`; nothing else redefines them.
+2. **Adapter-first evolution** — new layers wrap the proven generators;
+   root engine files are never deleted until the regression suite
+   (`tests/test_regression_legacy.py`) passes.
+3. **Math before geometry** — the docking solver passes its
+   Fusion-independent suite (straight, curve, reversed-flow, height/width
+   rejection, rotation hygiene, full-line chain) before any CAD integration.
+4. **Deterministic over heuristic** — ML proposes, engineering rules
+   dispose; every recommendation passes `rules_engine.gate` or is rejected.
+5. **No silent unit conversions** — all mm↔cm and deg↔rad conversions go
+   through `core/units.py` (CI-enforced).
+
+## Requirements
+
+- Autodesk Fusion 360 (2026 build recommended) for CAD generation.
+- Python 3.12+ with `pytest` for the offline suite (`pip install -r requirements.txt`).
+- No network access required; no external services are used.
