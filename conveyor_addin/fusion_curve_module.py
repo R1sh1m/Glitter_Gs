@@ -325,6 +325,8 @@ def _mm(val: float) -> str:
 def _find_or_add(up, name: str, expr: str, unit: str, comment: str = ""):
     ex = up.itemByName(name)
     if ex:
+        if ex.expression != expr:
+            ex.expression = expr
         return ex
     return up.add(name, adsk.core.ValueInput.createByString(expr), unit, comment)
 
