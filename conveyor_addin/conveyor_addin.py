@@ -187,7 +187,9 @@ def _sync_module_inputs(inputs) -> None:
     straight_group = inputs.itemById("group_straight")
     curved_group = inputs.itemById("group_curved")
     if straight_group is not None:
-        straight_group.isVisible = not is_curve
+        # Width, height, roller, leg, and guard fields are shared by both
+        # module types; keep them visible while the curve-only fields toggle.
+        straight_group.isVisible = True
     if curved_group is not None:
         curved_group.isVisible = is_curve
 
@@ -625,7 +627,7 @@ def run(context):
                     auto_opt.tooltip = "When enabled, changing payload or dimensions immediately auto-sizes rollers and leg stations"
 
                     # 3. Straight inputs group
-                    str_group = inputs.addGroupCommandInput("group_straight", "Straight Dimensions")
+                    str_group = inputs.addGroupCommandInput("group_straight", "Shared Conveyor Dimensions")
                     str_inputs = str_group.children
                     for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
                         item = str_inputs.addValueInput(
