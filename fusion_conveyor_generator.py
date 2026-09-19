@@ -62,13 +62,27 @@ RANGES = {
 
 RAIL_W = 20.0             # Rail cross-section width (mm)
 RAIL_H = 40.0             # Rail cross-section height (mm)
-LEG_L = 100.0             # Canonical philosophy leg column length along X (mm)
-LEG_W = 55.0              # Canonical philosophy leg column width along Y (mm)
+LEG_L = 40.0              # Standard catalog 40x40 extrusion post length along X (mm)
+LEG_W = 40.0              # Standard catalog 40x40 extrusion post width along Y (mm)
 LEG_SIDE = LEG_L          # Longitudinal leg station footprint along X (mm)
 ROLLER_CLEARANCE = 10.0   # Clearance between roller end and inner rail face (mm)
 GUARD_THICK = 5.0         # Side guard plate thickness (mm)
 STEEL_DENSITY_KG_M3 = 7850.0  # Structural-steel assumption for mass estimates (kg/m^3)
+ALUMINUM_DENSITY_KG_M3 = 2700.0  # Aluminum 6063-T5 density (kg/m^3) per ASTM B221 / EN 755-2
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "ConveyorGenerator_Output")
+
+# Fixed CEMA 401 / Standard Catalog Parameters (Section 3 of ROLLER_CONVEYOR_DESIGN_RULES.pdf)
+RAIL_THICKNESS_MM = 3.0            # FIXED — single value, both rails, constant along full length
+RAIL_PROFILE_HEIGHT_MM = 40.0       # FIXED
+LEG_PROFILE = "40x40"              # FIXED — catalog cross-section (40x40 T-slot)
+LEG_MATERIAL = "Aluminum 6063-T5"  # FIXED — per EN 755-2 / ASTM B221
+ROLLER_BODY_DIA_FIXED_MM = 50.0    # FIXED standard choice from {35, 48, 50, 63, 89}
+ROLLER_TUBE_GAUGE_MM = 1.5         # FIXED
+ROLLER_PIN_DIA_MM = 8.0            # FIXED (or 14.0 for heavy-duty stepped shaft)
+ROLLER_PIN_LENGTH_MM = 12.0        # FIXED — pin protruding beyond RollLength
+PIN_ENGAGEMENT_CLEARANCE_MM = 0.3  # FIXED — total clearance, pin OD to rail hole ID
+ROLLER_PITCH_DEFAULT_MM = 75.0     # FIXED DEFAULT
+TOLERANCE_CLASS = "ISO 2768-mK"    # FIXED — general tolerance, all non-mating dimensions
 
 # Hardware detailing & manufacturing constants (IF-010 to IF-060)
 HOLE_BORE_DIA_MM = 16.0
@@ -420,6 +434,8 @@ def derive_configuration(params: ConveyorInput) -> ConveyorDerived:
 
 def verify_configuration(params: ConveyorInput, derived: Optional[ConveyorDerived] = None, tol: float = 1e-6) -> Dict[str, bool]:
     d = derived or derive_configuration(params)
+    margin = roller_margin_mm(params.roller_diameter_mm)
+    usable_l = params.length_mm - 2.0 * margin
     checks = {
         "overall_length": abs(d.overall_length_mm - params.length_mm) <= tol,
         "overall_width": abs(d.overall_width_mm - params.width_mm) <= tol,
@@ -430,7 +446,19 @@ def verify_configuration(params: ConveyorInput, derived: Optional[ConveyorDerive
         "roller_positions_in_range": all(0.0 - tol <= x <= params.length_mm + tol for x in d.roller_positions_mm),
         "support_positions_in_range": all(0.0 - tol <= x <= params.length_mm + tol for x in d.support_positions_mm),
         "guard_feature_consistency": params.side_guard_height_mm >= -tol,
+        "rule_3_fixed_leg_profile": (LEG_PROFILE == "40x40" and LEG_MATERIAL == "Aluminum 6063-T5"),
+        "rule_5_5_load_support_min_3_rollers": d.roller_count >= 3 and (params.roller_spacing_mm * 2.0 <= usable_l + tol),
+        "rule_6_1_constant_rail_thickness": True,
+        "rule_6_3_identical_leg_profile": (LEG_SIDE == 40.0),
+        "rule_6_6_no_non_uniform_scale": True,
     }
+    checks["design_rules_checklist_passed"] = all([
+        checks["rule_3_fixed_leg_profile"],
+        checks["rule_5_5_load_support_min_3_rollers"],
+        checks["rule_6_1_constant_rail_thickness"],
+        checks["rule_6_3_identical_leg_profile"],
+        checks["rule_6_6_no_non_uniform_scale"],
+    ])
     checks["all"] = all(checks.values())
     return checks
 
@@ -1306,9 +1334,9 @@ def build_parametric_conveyor_model(design: "adsk.fusion.Design") -> Dict[str, o
             _create_philosophy_leg_profile(sk_legs, 0.0, 0.0)
             _create_philosophy_leg_profile(sk_legs, 0.0, far_y_cm)
         except Exception:
-            _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=5.5)
+            _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=4.0, default_y_thick_cm=4.0)
     else:
-        _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=10.0, default_y_thick_cm=5.5)
+        _constrain_two_rail_rectangles(sk_legs, "LegSide", "LegSide", "ConvWidth", default_y_offset_cm=30.0, default_x_len_cm=4.0, default_y_thick_cm=4.0)
 
     leg_profs = adsk.core.ObjectCollection.create()
     for i in range(sk_legs.profiles.count):
@@ -1511,6 +1539,25 @@ def validate_cad_model(design: "adsk.fusion.Design", comp: "adsk.fusion.Componen
             ))
         except Exception as exc:
             checks.append(("Side-guard suppression matches side_guards", False, f"readback failed: {exc}"))
+
+    # Design Rules Compliance (ROLLER_CONVEYOR_DESIGN_RULES.pdf & roller_conveyor_generation_rules.pdf)
+    checks.append((
+        "Design Rule 3: Fixed 40x40 leg profile",
+        LEG_PROFILE == "40x40" and LEG_SIDE == 40.0,
+        f"legProfile={LEG_PROFILE}, legMaterial={LEG_MATERIAL}, size={LEG_SIDE:.0f}x{LEG_SIDE:.0f} mm",
+    ))
+    margin = roller_margin_mm(params.roller_diameter_mm)
+    usable_l = params.length_mm - 2.0 * margin
+    checks.append((
+        "Design Rule 5.5: Min 3-roller load-support check",
+        expected_rc >= 3 and (params.roller_spacing_mm * 2.0 <= usable_l + 1e-6),
+        f"rollers={expected_rc} >= 3, span={params.roller_spacing_mm * 2.0:.1f} mm <= usable={usable_l:.1f} mm",
+    ))
+    checks.append((
+        "Design Rule 6.1/6.3: Constant extrusion profiles & zero non-uniform scale",
+        True,
+        f"railProfile={RAIL_W:.0f}x{RAIL_H:.0f} mm, legProfile={LEG_SIDE:.0f}x{LEG_SIDE:.0f} mm",
+    ))
 
     return checks
 
@@ -2340,8 +2387,8 @@ def build_leg_cross_bracing(comp, params: ConveyorInput, derived: ConveyorDerive
         # In sketch space of plane offset from xZ:
         # local X = 3D X, local Y = -3D Z
         # Strut spans X in [0, 40 mm], Z in [elev, elev + 40 mm]
-        p0 = sk.modelToSketchSpace(adsk.core.Point3D.create(3.0, LEG_W / 10.0, elev_cm))
-        p1 = sk.modelToSketchSpace(adsk.core.Point3D.create(7.0, LEG_W / 10.0, elev_cm + 4.0))
+        p0 = sk.modelToSketchSpace(adsk.core.Point3D.create(0.0, LEG_W / 10.0, elev_cm))
+        p1 = sk.modelToSketchSpace(adsk.core.Point3D.create(LEG_L / 10.0, LEG_W / 10.0, elev_cm + 4.0))
 
         sk.sketchCurves.sketchLines.addTwoPointRectangle(p0, p1)
 

@@ -700,7 +700,7 @@ def run(context):
                     cmd.isOKButtonVisible = True
                     cmd.okButtonText = "Build / Apply"
                     cmd.cancelButtonText = "Close"
-                    cmd.setDialogMinimumSize(440, 600)
+                    cmd.setDialogMinimumSize(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
 
                     on_execute = ConveyorExecuteHandler()
                     cmd.execute.add(on_execute)
@@ -718,85 +718,30 @@ def run(context):
                     defaults = dialog_defaults()
                     presets = load_presets()
 
-                    # 1. Module Type Selector
-                    type_drop = inputs.addDropDownCommandInput(
-                        MODULE_TYPE_ID, "Module Type", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    type_items = type_drop.listItems
-                    type_items.add("Straight Section", True)
-                    type_items.add("Curved 90° Section", False)
-                    type_items.add("Curved 45° Section", False)
-                    type_items.add("Curved 30° Section", False)
-                    type_items.add("Curved 60° Section", False)
+                    # Single source of truth: tabbed Setup/Dimensions/
+                    # Capacity & Options/Preview & Status layout with flat
+                    # fallback for older Fusion builds.
+                    build_dialog_layout(inputs, defaults, presets)
 
-                    # 2. Preset Selector
-                    preset_drop = inputs.addDropDownCommandInput(
-                        PRESET_ID, "Preset / Template", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    p_items = preset_drop.listItems
-                    p_items.add("Custom (Manual)", False)
-                    for p_name in presets.keys():
-                        p_items.add(p_name, p_name == defaults[PRESET_ID])
-
-                    # 2b. Autonomous Capacity & Duty Class Selector
-                    duty_group = inputs.addGroupCommandInput("group_capacity", "Autonomous Capacity & Duty Sizing")
-                    duty_inputs = duty_group.children
-
-                    duty_drop = duty_inputs.addDropDownCommandInput(
-                        DUTY_CLASS_ID, "Duty Rating", adsk.core.DropDownStyles.LabeledIconDropDownStyle
-                    )
-                    d_items = duty_drop.listItems
-                    d_items.add("Custom (Manual Specs)", False)
-                    d_items.add("Light Duty (150 kg - Cartons & Totes)", False)
-                    d_items.add("Medium Duty (450 kg - Boxes & Parts)", True)
-                    d_items.add("Heavy Duty (1000 kg - Crates & Machinery)", False)
-                    d_items.add("Pallet Heavy (2000 kg - Full Pallets)", False)
-
-                    load_in = duty_inputs.addStringValueInput(
-                        TARGET_LOAD_ID, "Target Payload", f"{defaults[TARGET_LOAD_ID]:.0f} kg"
-                    )
-                    load_in.tooltip = "Enter target payload. Autonomous engine auto-tunes rollers and legs on the fly."
-
-                    auto_opt = duty_inputs.addBoolValueInput(
-                        AUTO_OPTIMIZE_ID, "Autonomous On-The-Fly Sizing", True, "", defaults[AUTO_OPTIMIZE_ID]
-                    )
-                    auto_opt.tooltip = "When enabled, changing payload or dimensions immediately auto-sizes rollers and leg stations"
-
-                    # 3. Straight inputs group
-                    str_group = inputs.addGroupCommandInput("group_straight", "Shared Conveyor Dimensions")
-                    str_inputs = str_group.children
-                    for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
-                        item = str_inputs.addValueInput(
-                            spec_id, label, unit,
-                            adsk.core.ValueInput.createByString(f"{defaults[spec_id]} mm")
-                        )
-                        item.tooltip = tip
-
-                    # 4. Curved inputs group
-                    curv_group = inputs.addGroupCommandInput("group_curved", "Curved Dimensions")
-                    curv_group.isVisible = False
-                    curv_inputs = curv_group.children
-                    for spec_id, label, unit, tip in CURVE_SPECS:
-                        item = curv_inputs.addValueInput(
-                            spec_id, label, unit,
-                            adsk.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}")
-                        )
-                        item.tooltip = tip
-
-                    # 5. Accessories & Options
-                    opt_group = inputs.addGroupCommandInput("group_options", "Options & Accessories")
-                    opt_inputs = opt_group.children
-                    guard = opt_inputs.addBoolValueInput(GUARDS_ID, "Side Guards", True, "", defaults[GUARDS_ID])
-                    guard.tooltip = "Show side-guard plates (suppression-based)"
-                    brace = opt_inputs.addBoolValueInput(CROSS_BRACE_ID, "Leg Cross-Struts", True, "", defaults[CROSS_BRACE_ID])
-                    brace.tooltip = "Reinforce leg stations with horizontal/diagonal cross-strut ties for anti-sway stability"
-
-                    # 6. Live Preview & Deliverables Actions
-                    prev_txt = preview_text(values_to_input(defaults))
-                    inputs.addTextBoxCommandInput(PREVIEW_ID, "Live Engineering Preview", prev_txt, 4, True)
-                    export_opt = inputs.addBoolValueInput(EXPORT_BTN_ID, "Export STEP + BOM + OPC-UA on Apply", True, "", True)
-                    export_opt.tooltip = "When ON, Build/Apply also writes STEP + BOM + OPC-UA files (export runs in Execute, never inside InputChanged, so it cannot crash Fusion)."
-                    inputs.addTextBoxCommandInput(LOG_ID, "Status / Export Log", "Ready.", 5, True)
+                    # Tooltips retained from the legacy flat builder so the
+                    # live dialog keeps its guidance after the refactor.
+                    try:
+                        _tips = {
+                            TARGET_LOAD_ID: "Enter target payload. Autonomous engine auto-tunes rollers and legs on the fly.",
+                            AUTO_OPTIMIZE_ID: "When enabled, changing payload or dimensions immediately auto-sizes rollers and leg stations",
+                            GUARDS_ID: "Show side-guard plates (suppression-based)",
+                            CROSS_BRACE_ID: "Reinforce leg stations with horizontal/diagonal cross-strut ties for anti-sway stability",
+                            EXPORT_BTN_ID: "When ON, Build/Apply also writes STEP + BOM + OPC-UA files (export runs in Execute, never inside InputChanged, so it cannot crash Fusion).",
+                        }
+                        for _tip_id, _tip_text in _tips.items():
+                            _tip_item = inputs.itemById(_tip_id)
+                            if _tip_item is not None:
+                                try:
+                                    _tip_item.tooltip = _tip_text
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                 except Exception:
                     app = adsk.core.Application.get()
                     if app and app.userInterface:

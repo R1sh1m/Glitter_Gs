@@ -114,11 +114,11 @@ class MockUserParameter:
         elif self.name == "LegCount":
             length_mm = up._get_val_mm("ConvLength")
             s = up._get_val_mm("LegSpacing")
-            leg_side = up._get_val_mm("LegSide") if up.itemByName("LegSide") else 100.0
+            leg_side = up._get_val_mm("LegSide") if up.itemByName("LegSide") else 40.0
             return float(math.ceil((length_mm - leg_side) / s) + 1)
         elif self.name == "ActualLegSpacing":
             length_mm = up._get_val_mm("ConvLength")
-            leg_side = up._get_val_mm("LegSide") if up.itemByName("LegSide") else 100.0
+            leg_side = up._get_val_mm("LegSide") if up.itemByName("LegSide") else 40.0
             lc = up._get_val_mm("LegCount")
             denom = max(lc - 1, 1)
             return (length_mm - leg_side) / denom / 10.0  # cm
