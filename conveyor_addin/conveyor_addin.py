@@ -1048,8 +1048,8 @@ def run(context):
                     for occ in design.rootComponent.occurrences:
                         c_name = (occ.component.name or "") if occ.component else ""
                         o_name = occ.name or ""
-                        if (o_name.startswith("ParametricConveyor") or o_name.startswith("CurveModule") or
-                                c_name.startswith("ParametricConveyor") or c_name.startswith("CurveModule")):
+                        if (o_name.startswith("ParametricConveyor") or o_name.startswith("CurveModule")
+                                or c_name.startswith("ParametricConveyor") or c_name.startswith("CurveModule")):
                             parent_occ = occ
                             break
 
