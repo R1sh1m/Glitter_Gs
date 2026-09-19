@@ -51,7 +51,7 @@ def equivalent_pitch_mm(port: ConveyorPort, inner_radius_mm: float | None = None
     """
     if port.conveyor_type != "Curved" or inner_radius_mm is None:
         return float(port.roller_pitch)
-    ri = float(inner_radius_mm)
+    ri = inner_radius_mm
     rc = ri + port.width / 2.0
     ro = ri + port.width
     if ro <= 0:
