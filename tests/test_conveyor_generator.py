@@ -145,6 +145,117 @@ class ConveyorGeneratorTests(unittest.TestCase):
                 for row in rows[1:]:
                     self.assertGreaterEqual(float(row[2]), 0.0)
 
+    def test_export_bom_csv_with_color_columns(self):
+        import csv
+        import re
+        import tempfile
+        from fusion_conveyor_generator import export_bom_csv, COLORED_BOM_COLUMNS
+
+        demo = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(demo)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = export_bom_csv("TestColored", demo, derived, tmpdir, include_color=True)
+            self.assertTrue(os.path.exists(csv_path))
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            self.assertEqual(rows[0], COLORED_BOM_COLUMNS)
+            self.assertEqual(len(rows), 5)  # Header + Rails + Rollers + Legs + Guards
+            hex_pattern = re.compile(r"^#[0-9A-Fa-f]{6}$")
+            for row in rows[1:]:
+                # Color Hex is column index 10
+                color_hex = row[10]
+                self.assertTrue(hex_pattern.match(color_hex), f"Invalid hex color: {color_hex}")
+                # Color name is column index 9
+                self.assertGreater(len(row[9]), 0)
+                # Material is column index 7
+                self.assertGreater(len(row[7]), 0)
+                # Appearance is column index 8
+                self.assertGreater(len(row[8]), 0)
+
+    def test_export_bom_csv_custom_columns(self):
+        import csv
+        import tempfile
+        from fusion_conveyor_generator import export_bom_csv
+
+        demo = demo_configurations()["C1_compact_no_guards"]
+        derived = derive_configuration(demo)
+        custom_cols = ["Part Name", "Quantity", "Color", "Color Hex"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = export_bom_csv("CustomCols", demo, derived, tmpdir, columns=custom_cols)
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+            self.assertEqual(rows[0], custom_cols)
+            self.assertEqual(len(rows), 4)  # Rails + Rollers + Legs (no guards)
+            for row in rows[1:]:
+                self.assertEqual(len(row), 4)
+                self.assertTrue(row[3].startswith("#"))
+
+    def test_export_bom_colored_csv_and_html_companion(self):
+        import csv
+        import tempfile
+        from fusion_conveyor_generator import export_bom_csv, format_bom_console_table
+
+        demo = demo_configurations()["C2_medium_with_guards"]
+        derived = derive_configuration(demo)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = export_bom_csv("TestCompanion", demo, derived, tmpdir, include_color=False)
+            self.assertTrue(os.path.exists(csv_path))
+
+            # Companion colored CSV should be automatically created
+            colored_csv = os.path.join(tmpdir, "TestCompanion_BOM_colored.csv")
+            self.assertTrue(os.path.exists(colored_csv))
+            with open(colored_csv, "r", encoding="utf-8") as f:
+                read_colored = list(csv.reader(f))
+            self.assertIn("Color Hex", read_colored[0])
+            self.assertIn("Appearance", read_colored[0])
+
+            # Companion HTML should be automatically created
+            html_file = os.path.join(tmpdir, "TestCompanion_BOM.html")
+            self.assertTrue(os.path.exists(html_file))
+            with open(html_file, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            self.assertIn("Bill of Materials", html_content)
+            self.assertIn("color-swatch", html_content)
+            self.assertIn("#FFD700", html_content)
+
+            # Test console table formatter
+            console_out = format_bom_console_table([
+                {"Item": "1", "Part Name": "Side Rails", "Quantity": 2, "Total Mass (kg)": 14.2,
+                 "Color": "Dark Grey", "Color Hex": "#2B2B2B", "Material": "Steel"}
+            ])
+            self.assertIn("Side Rails", console_out)
+            self.assertIn("14.20", console_out)
+
+    def test_export_curve_bom_csv_with_colors(self):
+        import csv
+        import tempfile
+        from fusion_curve_module import demo_curve, derive_curve_configuration, export_curve_bom_csv
+
+        c_demo = demo_curve()
+        c_derived = derive_curve_configuration(c_demo)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Default call
+            path = export_curve_bom_csv("TestCurve", c_demo, c_derived, tmpdir)
+            self.assertTrue(os.path.exists(path))
+            with open(path, "r", encoding="utf-8") as f:
+                rows = list(csv.reader(f))
+            self.assertEqual(rows[0], ["Part Name", "Quantity", "Dimensions / Notes"])
+
+            # Colored call
+            colored_path = export_curve_bom_csv("TestCurveCol", c_demo, c_derived, tmpdir, include_color=True)
+            with open(colored_path, "r", encoding="utf-8") as f:
+                c_rows = list(csv.reader(f))
+            self.assertIn("Color Hex", c_rows[0])
+            self.assertIn("Appearance", c_rows[0])
+            self.assertIn("Material", c_rows[0])
+            self.assertGreater(len(c_rows), 5)
+
+            # HTML companion
+            html_path = os.path.join(tmpdir, "TestCurve_BOM.html")
+            self.assertTrue(os.path.exists(html_path))
+
     def test_mass_estimates_positive_and_guards_add_mass(self):
         from fusion_conveyor_generator import estimate_part_masses_kg
 

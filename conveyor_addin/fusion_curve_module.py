@@ -22,7 +22,7 @@ import math
 import os
 import csv
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:  # type-checkers only
     import adsk.core  # type: ignore
@@ -35,12 +35,14 @@ except ImportError:  # pragma: no cover - offline
     adsk = None
 
 from fusion_conveyor_generator import (
+    COLORED_BOM_COLUMNS,
     GUARD_THICK,
     LEG_SIDE,
     RAIL_H,
     RAIL_W,
     RANGES,
     ROLLER_CLEARANCE,
+    write_bom_html_table,
 )
 
 # ---------------------------------------------------------------------------
@@ -73,6 +75,11 @@ class CurveInput:
     support_spacing_mm: float
     side_guard_height_mm: float
     side_guards: bool
+
+
+def demo_curve() -> CurveInput:
+    """Returns a canonical demonstration curved conveyor input configuration."""
+    return CurveInput(800.0, 90.0, 450.0, 750.0, 50.0, 110.0, 700.0, 100.0, True)
 
 
 @dataclass(frozen=True)
@@ -770,38 +777,211 @@ def validate_curve_cad(design, comp, p: CurveInput, derived: CurveDerived,
     return checks
 
 
+# ---------------------------------------------------------------------------
+# Component Appearance, Color & Engineering Metadata for Curved Conveyors
+# ---------------------------------------------------------------------------
+CURVE_BOM_METADATA: Dict[str, Dict[str, str]] = {
+    "Curved Side Rails (arc)": {
+        "item": "1",
+        "category": "Frame & Structure",
+        "material": "Structural Steel (ASTM A36)",
+        "appearance": "Paint - Enamel Glossy (Dark Grey)",
+        "color_name": "Dark Grey",
+        "color_hex": "#2B2B2B",
+        "unit": "ea",
+    },
+    "Tapered Rollers (hollow tube)": {
+        "item": "2",
+        "category": "Roller Bed",
+        "material": "Stainless Steel (AISI 304)",
+        "appearance": "Stainless Steel - Polished",
+        "color_name": "Polished Steel",
+        "color_hex": "#E0E0E0",
+        "unit": "ea",
+    },
+    "Roller Shafts dia14": {
+        "item": "3",
+        "category": "Drive & Hardware",
+        "material": "Carbon Steel 1045 (Zinc Plated)",
+        "appearance": "Steel - Zinc Plated",
+        "color_name": "Zinc Silver",
+        "color_hex": "#B8B8B8",
+        "unit": "ea",
+    },
+    "Bearing Rings 6002-class": {
+        "item": "4",
+        "category": "Drive & Hardware",
+        "material": "Chrome Steel (AISI 52100)",
+        "appearance": "Steel - Polished",
+        "color_name": "Chrome Silver",
+        "color_hex": "#DCDCDC",
+        "unit": "ea",
+    },
+    "Support Leg Posts": {
+        "item": "5",
+        "category": "Support System",
+        "material": "Aluminum (6061-T6)",
+        "appearance": "Aluminum - Satin",
+        "color_name": "Satin Aluminum",
+        "color_hex": "#C0C0C0",
+        "unit": "ea",
+    },
+    "Motor Bay Plate + slots": {
+        "item": "6",
+        "category": "Drive & Mount",
+        "material": "Structural Steel (ASTM A36)",
+        "appearance": "Steel - Matte Black",
+        "color_name": "Matte Black",
+        "color_hex": "#1A1A1A",
+        "unit": "ea",
+    },
+    "Motor dia120 + Pulley dia80": {
+        "item": "7",
+        "category": "Drive & Motion",
+        "material": "Cast Iron / Aluminum",
+        "appearance": "Paint - Enamel (Industrial Blue)",
+        "color_name": "Industrial Blue",
+        "color_hex": "#005A9C",
+        "unit": "ea",
+    },
+    "Foot Plates + anchors": {
+        "item": "8",
+        "category": "Support System",
+        "material": "Galvanized Steel",
+        "appearance": "Steel - Galvanized",
+        "color_name": "Galvanized Gray",
+        "color_hex": "#9E9E9E",
+        "unit": "ea",
+    },
+    "Sensor Bracket + Dock Boards": {
+        "item": "9",
+        "category": "Control & Interlock",
+        "material": "Polycarbonate / Delrin",
+        "appearance": "Plastic - Glossy (Safety Orange)",
+        "color_name": "Safety Orange",
+        "color_hex": "#FF6600",
+        "unit": "set",
+    },
+    "Curved Side Guards": {
+        "item": "10",
+        "category": "Safety Guard",
+        "material": "Powder-Coated Steel / Acrylic",
+        "appearance": "Paint - Enamel Glossy (Yellow)",
+        "color_name": "Safety Yellow",
+        "color_hex": "#FFD700",
+        "unit": "ea",
+    },
+}
+
+DEFAULT_CURVE_BOM_COLUMNS: List[str] = ["Part Name", "Quantity", "Dimensions / Notes"]
+
+
 def export_curve_bom_csv(tag: str, p: CurveInput, derived: CurveDerived,
-                         output_dir: str) -> str:
+                         output_dir: str,
+                         include_color: bool = False,
+                         columns: Optional[List[str]] = None,
+                         generate_colored_csv: bool = True,
+                         generate_colored_html: bool = True) -> str:
+    """Exports a formatted Bill of Materials (CSV) for the curved conveyor configuration.
+
+    Parameters:
+        tag: Configuration identifier (e.g. "Curve90_Ri800").
+        p: Physical curve inputs.
+        derived: Derived curve geometry.
+        output_dir: Directory where deliverables are written.
+        include_color: If True, outputs rich colored elements columns.
+        columns: Optional custom list of column names.
+        generate_colored_csv: If True (default), writes companion ``{tag}_BOM_colored.csv``.
+        generate_colored_html: If True (default), writes companion ``{tag}_BOM.html``.
+    """
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, f"{tag}_BOM.csv")
     hw = estimate_hardware_masses_kg(p, derived)
-    rows = [
-        ("Curved Side Rails (arc)", 2,
+
+    # Component mass calculations
+    m_rails = (derived.arc_inner_mm + derived.arc_outer_mm) * RAIL_W * RAIL_H * 1e-9 * 7850.0
+    m_tubes = hw.get("Tapered Tubes (hollow)", 0.0)
+    m_shafts = hw.get("Shafts", 0.0)
+    m_bearings = hw.get("Bearing Rings", 0.0)
+    m_legs = derived.support_count * 2 * LEG_SIDE * LEG_SIDE * max(0.0, p.height_mm - RAIL_H) * 1e-9 * 2700.0
+    m_bay = 350.0 * 300.0 * 10.0 * 1e-9 * 7850.0
+    m_motor = hw.get("Motor + Pulley", 0.0)
+    m_feet = derived.support_count * 2 * 100.0 * 100.0 * 8.0 * 1e-9 * 7850.0
+    m_sensors = 1.5
+    m_guards = (derived.arc_outer_mm * p.side_guard_height_mm * GUARD_THICK * 2) * 1e-9 * 7850.0 if p.side_guards else 0.0
+
+    raw_items = [
+        ("Curved Side Rails (arc)", 2, m_rails,
          f"Ri={p.inner_radius_mm:.0f} Ro={derived.outer_radius_mm:.0f} "
          f"arc_in={derived.arc_inner_mm:.0f}mm arc_out={derived.arc_outer_mm:.0f}mm section={RAIL_W}x{RAIL_H}"),
-        ("Tapered Rollers (hollow tube)", derived.roller_count,
+        ("Tapered Rollers (hollow tube)", derived.roller_count, m_tubes,
          f"d_in={p.roller_dia_inner_mm:.1f} d_out={derived.roller_dia_outer_mm:.1f} "
-         f"len={p.width_mm - 2 * (RAIL_W + ROLLER_CLEARANCE):.0f} wall={TUBE_WALL_MM} "
-         f"mass={hw['Tapered Tubes (hollow)']:.1f}kg"),
-        ("Roller Shafts dia14", derived.roller_count,
-         f"len={shaft_length_for(p.width_mm):.0f} mass={hw['Shafts']:.1f}kg"),
-        ("Bearing Rings 6002-class", derived.roller_count * 2,
-         f"32OD/15bore/9W mass={hw['Bearing Rings']:.1f}kg"),
-        ("Support Leg Posts", derived.support_count * 2,
+         f"len={p.width_mm - 2 * (RAIL_W + ROLLER_CLEARANCE):.0f} wall={TUBE_WALL_MM} mass={m_tubes:.1f}kg"),
+        ("Roller Shafts dia14", derived.roller_count, m_shafts,
+         f"len={shaft_length_for(p.width_mm):.0f} mass={m_shafts:.1f}kg"),
+        ("Bearing Rings 6002-class", derived.roller_count * 2, m_bearings,
+         f"32OD/15bore/9W mass={m_bearings:.1f}kg"),
+        ("Support Leg Posts", derived.support_count * 2, m_legs,
          f"stations={derived.support_count} section={LEG_SIDE}x{LEG_SIDE} h={p.height_mm - RAIL_H:.0f}"),
-        ("Motor Bay Plate + slots", 1, "350x300x10, 4 tension slots"),
-        ("Motor dia120 + Pulley dia80", 1, f"mass={hw['Motor + Pulley']:.1f}kg"),
-        ("Foot Plates + anchors", derived.support_count * 2,
+        ("Motor Bay Plate + slots", 1, m_bay, "350x300x10, 4 tension slots"),
+        ("Motor dia120 + Pulley dia80", 1, m_motor, f"mass={m_motor:.1f}kg"),
+        ("Foot Plates + anchors", derived.support_count * 2, m_feet,
          f"{derived.support_count * 2} plates 100x100x8, {derived.support_count * 2 * 4} dia11 bores"),
-        ("Sensor Bracket + Dock Boards", 5, "1 sensor set (bore dia20), 4 dock boards + 8 pin bores dia12"),
+        ("Sensor Bracket + Dock Boards", 5, m_sensors,
+         "1 sensor set (bore dia20), 4 dock boards + 8 pin bores dia12"),
     ]
     if p.side_guards:
-        rows.append(("Curved Side Guards", 2,
-                     f"h={p.side_guard_height_mm:.0f} t={GUARD_THICK} arc_out={derived.arc_outer_mm:.0f}mm"))
+        raw_items.append((
+            "Curved Side Guards", 2, m_guards,
+            f"h={p.side_guard_height_mm:.0f} t={GUARD_THICK} arc_out={derived.arc_outer_mm:.0f}mm"
+        ))
+
+    records: List[Dict[str, Any]] = []
+    for name, qty, tot_m, notes in raw_items:
+        meta = CURVE_BOM_METADATA.get(name, {})
+        u_m = tot_m / qty if qty > 0 else 0.0
+        records.append({
+            "Item": meta.get("item", ""),
+            "Category": meta.get("category", "General"),
+            "Part Name": name,
+            "Quantity": qty,
+            "Unit": meta.get("unit", "ea"),
+            "Unit Mass (kg)": f"{u_m:.2f}",
+            "Total Mass (kg)": f"{tot_m:.2f}",
+            "Mass (kg)": f"{tot_m:.2f}",
+            "Material": meta.get("material", "-"),
+            "Appearance": meta.get("appearance", "-"),
+            "Color": meta.get("color_name", "-"),
+            "Color Hex": meta.get("color_hex", "-"),
+            "Dimensions / Notes": notes,
+        })
+
+    # Select fields for primary CSV
+    if columns is not None:
+        selected_columns = columns
+    elif include_color:
+        selected_columns = COLORED_BOM_COLUMNS
+    else:
+        selected_columns = DEFAULT_CURVE_BOM_COLUMNS
+
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["Part Name", "Quantity", "Dimensions / Notes"])
-        w.writerows(rows)
+        w.writerow(selected_columns)
+        for rec in records:
+            w.writerow([rec.get(c, "") for c in selected_columns])
+
+    if generate_colored_csv and not include_color and columns is None:
+        colored_csv_path = os.path.join(output_dir, f"{tag}_BOM_colored.csv")
+        with open(colored_csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(COLORED_BOM_COLUMNS)
+            for rec in records:
+                w.writerow([rec.get(c, "") for c in COLORED_BOM_COLUMNS])
+
+    if generate_colored_html:
+        html_path = os.path.join(output_dir, f"{tag}_BOM.html")
+        write_bom_html_table(tag, records, html_path)
+
     return path
 
 

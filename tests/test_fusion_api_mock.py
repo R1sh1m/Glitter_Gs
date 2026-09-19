@@ -71,6 +71,9 @@ class MockObjectCollection:
     def item(self, index: int) -> Any:
         return self._items[index]
 
+    def __len__(self) -> int:
+        return len(self._items)
+
     def __iter__(self):
         return iter(self._items)
 
@@ -380,6 +383,83 @@ class MockBoundingBox3D:
         return MockPoint3D(l_mm / 10.0, w_mm / 10.0, total_h / 10.0)
 
 
+class MockJointMotion:
+    def __init__(self):
+        self.rotationValue = 0.0
+
+
+class MockAsBuiltJoint:
+    def __init__(self, name: str = ""):
+        self.name = name
+        self.jointMotion = MockJointMotion()
+
+
+class MockAsBuiltJointInput:
+    def __init__(self, entity_one=None, entity_two=None, origin=None):
+        self.entity_one = entity_one
+        self.entity_two = entity_two
+        self.origin = origin
+        self.jointType = None
+        self.stepper = None
+        self.axis = None
+
+    def setAsRevoluteJointMotion(self, stepper=None, axis=None):
+        self.stepper = stepper
+        self.axis = axis
+
+
+class MockAsBuiltJoints:
+    def __init__(self):
+        self.joints: List[MockAsBuiltJoint] = []
+
+    def createInput(self, entity_one, entity_two, origin):
+        return MockAsBuiltJointInput(entity_one, entity_two, origin)
+
+    def add(self, joint_input: MockAsBuiltJointInput) -> MockAsBuiltJoint:
+        j = MockAsBuiltJoint("AsBuiltJoint")
+        self.joints.append(j)
+        return j
+
+
+class MockJoints:
+    def __init__(self):
+        self.joints: List[MockAsBuiltJoint] = []
+
+    def createInput(self, geometry_or_occurrence_one, geometry_or_occurrence_two):
+        return MockAsBuiltJointInput(geometry_or_occurrence_one, geometry_or_occurrence_two, None)
+
+    def add(self, joint_input: MockAsBuiltJointInput) -> MockAsBuiltJoint:
+        j = MockAsBuiltJoint("Joint")
+        self.joints.append(j)
+        return j
+
+
+class MockMotionLink:
+    def __init__(self, name: str = "", joint1=None, joint2=None):
+        self.name = name
+        self.joint1 = joint1
+        self.joint2 = joint2
+
+
+class MockMotionLinkInput:
+    def __init__(self, joint1, joint2):
+        self.joint1 = joint1
+        self.joint2 = joint2
+
+
+class MockMotionLinks:
+    def __init__(self):
+        self.links: List[MockMotionLink] = []
+
+    def createInput(self, joint1, joint2):
+        return MockMotionLinkInput(joint1, joint2)
+
+    def add(self, link_input: MockMotionLinkInput) -> MockMotionLink:
+        ml = MockMotionLink("MotionLink", link_input.joint1, link_input.joint2)
+        self.links.append(ml)
+        return ml
+
+
 class MockComponent:
     def __init__(self, design: "MockDesign", name: str = ""):
         self.design = design
@@ -393,7 +473,18 @@ class MockComponent:
         self.xYConstructionPlane = MockConstructionPlane("XY")
         self.xZConstructionPlane = MockConstructionPlane("XZ")
         self.xConstructionAxis = "X_Axis"
+        self.yConstructionAxis = "Y_Axis"
+        self.asBuiltJoints = MockAsBuiltJoints()
+        self.joints = MockJoints()
         self._ext_guards: Optional[MockExtrudeFeature] = None
+
+    @property
+    def bRepBodies(self) -> MockObjectCollection:
+        coll = MockObjectCollection()
+        for f in self.features.extrudeFeatures.features:
+            for b in f.bodies:
+                coll.add(b)
+        return coll
 
     @property
     def boundingBox(self) -> MockBoundingBox3D:
@@ -465,6 +556,7 @@ class MockDesign:
         self.rootComponent.occurrences = MockOccurrences(self)
         self.exportManager = MockExportManager()
         self.timeline = MockTimeline()
+        self.motionLinks = MockMotionLinks()
         self.compute_all_calls = 0
 
     def computeAll(self):
@@ -519,6 +611,14 @@ class MockExtentDirections:
     PositiveExtentDirection = "Positive"
 
 
+class MockJointSteppers:
+    CustomJointStepper = "CustomJointStepper"
+
+
+class MockJointTypes:
+    RevoluteJointType = "Revolute"
+
+
 class MockAdskFusion:
     Design = MockDesign
     DimensionOrientations = MockDimensionOrientations
@@ -526,6 +626,8 @@ class MockAdskFusion:
     PatternDistanceType = MockPatternDistanceType
     DistanceExtentDefinition = MockDistanceExtentDefinition
     ExtentDirections = MockExtentDirections
+    JointSteppers = MockJointSteppers
+    JointTypes = MockJointTypes
 
 
 class MockAdsk:
@@ -686,6 +788,42 @@ class AutodeskFusionApiIntegrationTests(unittest.TestCase):
         self.assertEqual(len(refs["component"].sketches.sketches), 4)
         self.assertEqual(len(refs["component"].features.extrudeFeatures.features), 4)
         self.assertEqual(len(refs["component"].features.rectangularPatternFeatures.patterns), 2)
+
+    def test_roller_mechanism_revolute_motion_and_links(self):
+        """Verify movable roller mechanism creates revolute joints, motion links, and supports jogging."""
+        demo = self.fcg.demo_configurations()["C2_medium_with_guards"]
+        self.fcg.create_user_parameters(self.design, demo)
+        refs = self.fcg.build_parametric_conveyor_model(self.design)
+
+        self.assertIn("roller_mechanism", refs)
+        self.assertIn("roller_joints", refs)
+        self.assertIn("motion_links", refs)
+
+        mech = refs["roller_mechanism"]
+        self.assertGreaterEqual(mech["roller_count"], 5)
+        self.assertEqual(mech["dof"], "Revolute_Y")
+        self.assertTrue(mech["synchronous_drive"])
+
+        # Check native joints and motion links created in mock design
+        self.assertGreaterEqual(len(mech["joints"]), 1)
+        self.assertGreaterEqual(len(mech["motion_links"]), 1)
+        self.assertEqual(len(self.design.motionLinks.links), len(mech["motion_links"]))
+
+        # Jog roller mechanism by 45 degrees
+        jog_res = self.fcg.jog_roller_mechanism(self.design, refs["component"], angle_deg=45.0, model_refs=refs)
+        self.assertEqual(jog_res["applied_rotation_deg"], 45.0)
+        self.assertGreaterEqual(jog_res["updated_joints"], 1)
+
+        # Simulate parcel transport (150 mm travel)
+        sim_res = self.fcg.simulate_conveyor_transport(self.design, refs["component"], travel_distance_mm=150.0, model_refs=refs)
+        self.assertEqual(sim_res["travel_distance_mm"], 150.0)
+        self.assertIn("applied_rotation_deg", sim_res)
+
+        # Validate kinematic mechanism
+        mech_checks = self.fcg.validate_roller_mechanism(self.design, refs["component"], model_refs=refs)
+        self.assertTrue(len(mech_checks) >= 3)
+        for label, passed, detail in mech_checks:
+            self.assertTrue(passed, f"Kinematic check failed: {label} ({detail})")
 
 
 if __name__ == "__main__":
