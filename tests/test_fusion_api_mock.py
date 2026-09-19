@@ -14,7 +14,8 @@ import os
 import sys
 import tempfile
 import unittest
-from typing import Any, Dict, List, Optional
+from types import ModuleType
+from typing import Any, Dict, List, Optional, cast
 
 
 # ===========================================================================
@@ -37,9 +38,9 @@ class MockValueInput:
 
 class MockPoint3D:
     def __init__(self, x: float = 0.0, y: float = 0.0, z: float = 0.0):
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
+        self.x = x
+        self.y = y
+        self.z = z
 
     @staticmethod
     def create(x: float = 0.0, y: float = 0.0, z: float = 0.0):
@@ -88,7 +89,7 @@ class MockUserParameter:
 
     @expression.setter
     def expression(self, val: str):
-        self._expression = str(val)
+        self._expression = val
 
     @property
     def value(self) -> float:
@@ -540,9 +541,9 @@ class AutodeskFusionApiIntegrationTests(unittest.TestCase):
     def setUp(self):
         """Inject adsk mock into sys.modules and fusion_conveyor_generator."""
         self.mock_adsk = MockAdsk()
-        sys.modules["adsk"] = self.mock_adsk
-        sys.modules["adsk.core"] = MockAdskCore
-        sys.modules["adsk.fusion"] = MockAdskFusion
+        sys.modules["adsk"] = cast(ModuleType, self.mock_adsk)
+        sys.modules["adsk.core"] = cast(ModuleType, MockAdskCore)
+        sys.modules["adsk.fusion"] = cast(ModuleType, MockAdskFusion)
 
         import fusion_conveyor_generator as fcg
         self.fcg = fcg

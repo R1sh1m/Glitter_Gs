@@ -1,0 +1,329 @@
+=== Docs/Design rules/ROLLER_CONVEYOR_DESIGN_RULES.pdf ===
+--- PAGE 1 ---
+ROLLER_CONVEYOR_DESIGN_RULES.md
+<!-- Machine-readable reference document. Intended to be
+loaded as context/system knowledge by an AI model generating
+or validating parametric roller-conveyor CAD via the Fusion API.
+Format: explicit constants, unambiguous rules, formulas. Avoid
+re-deriving anything marked FIXED. Every rule has an ID for
+citation in generated code comments or error messages. -->
+0. PURPOSE
+This document is the single source of truth for roller conveyor
+geometry generation.
+Any generated model, script, or parameter set MUST conform to
+every rule below.
+If a rule and a user input conﬂict, ﬂag the conﬂict — do not
+silently override a FIXED value.
+1. TERMINOLOGY (per CEMA 102 — use
+exactly these terms in code, comments, UI)
+Term Deﬁnition
+BF Between Frames — clear width between inner
+faces of the two side rails
+OAW Overall Width = BF + 2×railThickness +
+2×railFlangeProjection
+--- PAGE 2 ---
+Term Deﬁnition
+RollFace /
+RollLength
+Load-bearing tube length of the roller
+(excludes pin)
+Pitch (P)
+Center-to-center spacing between adjacent
+roller axes
+BFH Between-Frame Height — top of rail to
+ground
+2. PARAMETER CLASSES
+Every parameter in this system belongs to exactly one class. A
+parameter must never move
+between classes at generation time.
+FIXED  — set once from the table below; identical across all
+instances of that part in one model
+VARIABLE  — supplied by user per generation run; may differ
+between runs
+DERIVED  — computed from FIXED + VARIABLE only, via the
+formulas in Section 5
+RULE 2.1: A FIXED parameter must never appear as the output of
+a formula that includes a VARIABLE.
+RULE 2.2: A DERIVED parameter must never be hand-edited after
+computation; regenerate instead.
+3. FIXED PARAMETERS (source: this
+project's standard, based on CEMA 401
+--- PAGE 3 ---
+practice)
+railThickness_mm: 3.0            # FIXED — single 
+value, both rails, constant along full length
+railProfileHeight_mm: 40.0       # FIXED
+legProfile: "40x40"              # FIXED — catalog 
+cross-section, not custom sketch
+legMaterial: "Aluminum 6063-T5"  # FIXED — per EN 
+755-2 / ASTM B221
+rollerBodyDia_mm: 50.0           # FIXED — choose 
+one from {35, 48, 50, 63, 89}
+rollerTubeGauge_mm: 1.5          # FIXED
+rollerPinDia_mm: 8.0             # FIXED
+rollerPinLength_mm: 12.0         # FIXED — length of 
+pin protruding beyond RollLength
+pinEngagementClearance_mm: 0.3   # FIXED — total 
+clearance, pin OD to rail hole ID
+rollerPitch_mm: 75.0             # FIXED DEFAULT — 
+user may override, see RULE 5.3
+toleranceClass: "ISO 2768-mK"    # FIXED — general 
+tolerance, all non-mating dimensions
+RULE 3.1: Do not change values in this table per-instance. If a
+different duty class is needed
+(light/medium/heavy), deﬁne a second complete table — never
+blend values from two classes.
+4. VARIABLE PARAMETERS (user-supplied
+per run)
+conveyorLength_mm: <user input>
+conveyorWidth_BF_mm: <user input>     # this is BF, 
+not OAW — see Section 1
+legHeight_mm: <user input>
+--- PAGE 4 ---
+rollerPitch_override_mm: <optional>   # if present, 
+overrides FIXED rollerPitch_mm for this run only
+5. DERIVED FORMULAS (compute only from
+FIXED + VARIABLE; never hardcode)
+RULE 5.1  OAW_mm = conveyorWidth_BF_mm + 
+2*railThickness_mm + 2*railFlangeProjection_mm
+RULE 5.2  rollerBodyLength_mm = conveyorWidth_BF_mm 
+- 2*pinEngagementClearance_mm
+          # This is the CAD rule for "inner face of 
+rail touches roller pin base":
+          # rail inner face position = ± 
+(rollerBodyLength_mm / 2) from centerline
+RULE 5.3  effectivePitch_mm = 
+rollerPitch_override_mm OR rollerPitch_mm (FIXED 
+default)
+RULE 5.4  rollerCount = floor((conveyorLength_mm - 
+endClearance_mm) / effectivePitch_mm) + 1
+RULE 5.5  MINIMUM LOAD-SUPPORT CHECK (hard 
+constraint, not advisory):
+          shortest expected unit load (mm) must span 
+>= 3 * effectivePitch_mm
+          If violated: reduce effectivePitch_mm and 
+recompute RULE 5.4. Do not proceed silently.
+6. GEOMETRY / ASSEMBLY RULES (hard
+constraints)
+--- PAGE 5 ---
+RULE 6.1 — Side rails: single extrude, one cross-section sketch,
+swept the full conveyorLength_mm
+with zero taper or scale change. railThickness_mm  is read
+from Section 3 exactly once.
+RULE 6.2 — Left and right rails are mirror instances of the same
+body/parameter set. Never two
+independently-dimensioned sketches.
+RULE 6.3 — Legs: extrude proﬁle = legProfile  (Section 3),
+constant cross-section along
+legHeight_mm  only. All legs in one model reference the same
+proﬁle instance.
+RULE 6.4 — Roller-to-rail joint: rigid/pin joint, zero gap, at the
+position computed in RULE 5.2.
+Do not position by manual coordinate offset — use a Fusion joint
+referencing the named parameters.
+RULE 6.5 — Leg-to-rail joint: rigid joint, at a FIXED offset from the
+rail proﬁle (not recomputed
+from railThickness_mm per instance).
+RULE 6.6 — No component may use a non-uniform Scale feature
+to force a dimensional ﬁt. A ﬁt
+failure means a parameter value is wrong (see Section 3/5) — ﬁx
+the parameter, regenerate.
+RULE 6.7 — Tolerancing: apply toleranceClass  (Section 3) to
+all dimensions by default. Apply a
+tighter explicit ﬁt only at: (a) roller pin OD ↔  rail hole ID, (b) leg-
+to-rail mounting face.
+--- PAGE 6 ---
+7. VALIDATION CHECKLIST (run before
+returning any generated model)
+[ ] railThickness_mm referenced from Section 3 
+exactly once, used by both rails
+[ ] legProfile identical across every leg instance 
+in the model
+[ ] rail inner face coincides with roller pin base 
+per RULE 5.2 (joint-verified, zero gap)
+[ ] no part uses non-uniform scale
+[ ] no FIXED value was recomputed inside a loop over 
+length/count
+[ ] RULE 5.5 load-support check passed for the given 
+conveyorLength_mm / effectivePitch_mm
+[ ] BF vs OAW used correctly and not interchanged 
+anywhere in the script
+```//
+If any check fails: stop, report which rule ID 
+failed, do not emit geometry.
+---
+## 8. CHANGE POLICY
+If a new duty class, material, or standard revision 
+is needed, add a new versioned block to
+Section 3 (e.g. `# v2 — heavy duty`) rather than 
+editing values in place. Keep prior versions for
+traceability back to the standard/date they were 
+sourced from.
+=== Docs/Design rules/roller_conveyor_generation_rules.pdf ===
+--- PAGE 1 ---
+Roller Conveyor — Parametric
+CAD Generation Rules
+For Fusion 360 API Add-in (strict spec for
+automated generation)
+These rules exist to eliminate two recurring defects:
+non-constant side rail thickness and non-constant
+leg thickness. Any generated model that violates a
+rule below is invalid and must be regenerated, not
+visually patched.
+1. Core Principle
+Thickness and cross-section are ﬁxed constants.
+Only length/position parameters may vary with user
+input.
+Every part has exactly two kinds of dimensions:
+Fixed (constant) dimensions — wall thickness,
+extrusion cross-section, pin diameter, rail proﬁle.
+These are set once from a lookup/standard table
+and never derived from conveyor length, width, or
+roller count.
+--- PAGE 2 ---
+Variable dimensions — conveyor length, conveyor
+width, number of rollers, leg height. These may
+change per user input, but must never feed back
+into a ﬁxed dimension above.
+If a generation step ever computes a thickness or
+cross-section as a function of length/width/count,
+that is a bug.
+2. Side Rails
+Side rail is an extruded proﬁle (channel/L-section)
+swept along the length axis only.
+Wall thickness is a single named parameter (e.g.
+railThickness = 3 mm ) applied uniformly to the
+whole cross-section sketch. It must be deﬁned
+once, in one sketch, and referenced everywhere
+else — never re-entered or recalculated per
+instance.
+The cross-section sketch must be extruded with a
+constant proﬁle along the entire rail length
+(single extrude operation, no tapering, no per-
+segment scaling).
+Inner face rule: the inner face of the side rail must
+be coincident with (touching, zero gap) the outer
+face/end of the roller pins/shafts that protrude
+from each roller. This is a mate/joint constraint,
+not a visual guess:
+--- PAGE 3 ---
+RailInnerFaceOffset = RollerBodyLength
+/ 2  from the conveyor centerline, on both
+sides.
+Roller pin length is only what protrudes
+beyond this inner face into the rail's pin hole —
+it must not determine rail spacing; rail spacing
+determines how far the pin needs to reach.
+Left and right rails must be mirrored copies of the
+same proﬁle/parameter set — never independently
+dimensioned.
+3. Legs
+Legs are standard aluminum extrusion proﬁles
+(e.g. 20×20, 40×40 T-slot), selected from a ﬁxed
+catalog of allowed cross-sections — never a
+custom/derived rectangle.
+Cross-section size is a single ﬁxed parameter for
+the whole model, independent of conveyor width,
+length, roller count, or leg height.
+Only the extrude length (height) may vary, and
+only along the leg's own axis.
+All legs in one assembly must reference the same
+cross-section parameter instance. No leg may be
+generated from a separately-scaled or separately-
+sketched proﬁle.
+--- PAGE 4 ---
+Leg-to-rail attachment point (bracket/face) must
+be deﬁned as a ﬁxed offset from the rail's ﬁxed
+proﬁle — not recomputed from rail thickness each
+time.
+4. Rollers
+Roller body diameter and pin diameter are ﬁxed
+catalog parameters, not derived from rail spacing.
+Roller body length = ConveyorWidth − 2 ×
+RailInnerWallOffset − 2 ×
+PinEngagementClearance .
+Pin length is ﬁxed (catalog value); only the
+quantity of rollers changes with conveyor length
+(via ﬁxed pitch spacing), never their geometry.
+Roller pitch (center-to-center spacing) is a ﬁxed
+parameter; roller count = floor((ConveyorLength
+− endClearance) / pitch) + 1 . Never solve
+pitch backward from a desired count unless the
+user explicitly overrides pitch.
+5. Assembly / Joint Rules
+Use Fusion joints or as-built joints, not manual
+positioning by coordinate math, for:
+Roller pin →  rail pin-hole (rigid/pin joint, zero
+gap).
+Leg top face →  rail bottom face (rigid joint).
+--- PAGE 5 ---
+Every joint must reference the named ﬁxed
+parameters above (rail thickness, leg cross-
+section, pin diameter) — never a one-off numeric
+literal typed into a joint offset.
+No component may be scaled (non-uniform scale,
+"Scale" feature) to force a ﬁt. If a part doesn't ﬁt,
+the parameter values are wrong — ﬁx the
+parameter, not the geometry after the fact.
+6. Parameter Naming Convention
+(required)
+All ﬁxed dimensions must exist as User Parameters in
+Fusion, named and typed exactly as:
+Parameter Type Notes
+railThickness ﬁxed
+single
+source
+of truth
+for
+both
+rails
+railProfileHeight ﬁxed
+rail
+cross-
+section
+height
+--- PAGE 6 ---
+Parameter Type Notes
+legProfile
+ﬁxed
+(enum/catalog)
+e.g.
+"40x40"
+rollerBodyDia ﬁxed
+rollerPinDia ﬁxed
+rollerPinLength ﬁxed
+rollerPitch
+ﬁxed (default)
+or user-
+override
+conveyorLength variable
+user
+input
+conveyorWidth variable user
+input
+legHeight variable
+user
+input
+Variable parameters may only appear in sketches that
+deﬁne length/position. Fixed parameters may only
+appear in cross-section sketches. A generation script
+must never write to a ﬁxed parameter inside a loop
+that iterates over length/count.
+--- PAGE 7 ---
+7. Pre-Generation Validation
+Checklist (run before every output)
+1. Is railThickness  referenced from exactly one
+parameter, on both rails? ✅ / ❌
+2. Is legProfile  identical across every leg
+instance? ✅ / ❌
+3. Does the rail inner face coincide with roller pin
+outer face (zero gap, joint-veriﬁed)? ✅ / ❌
+4. Are any parts using non-uniform scale? (must be
+none) ✅ / ❌
+5. Were any ﬁxed dimensions computed inside the
+length/count loop? (must be none) ✅ / ❌
+6. Do left/right rails and all legs derive from the
+same proﬁle instance, not duplicated/re-sketched
+copies? ✅ / ❌
+If any check fails, do not emit the model — ﬁx the
+parameter reference and regenerate.

@@ -503,6 +503,35 @@ class StraightHoleTests(unittest.TestCase):
         self.assertIn("safety_factor", ratings)
         self.assertTrue(ratings["cross_bracing_enabled"])
 
+    def test_design_rules_checklist_compliance(self):
+        """Enforces all design rules from ROLLER_CONVEYOR_DESIGN_RULES.pdf."""
+        from fusion_conveyor_generator import (
+            LEG_PROFILE,
+            LEG_MATERIAL,
+            LEG_SIDE,
+            RAIL_THICKNESS_MM,
+            RAIL_PROFILE_HEIGHT_MM,
+            demo_configurations,
+            derive_configuration,
+            verify_configuration,
+        )
+        self.assertEqual(LEG_PROFILE, "40x40")
+        self.assertEqual(LEG_MATERIAL, "Aluminum 6063-T5")
+        self.assertEqual(LEG_SIDE, 40.0)
+        self.assertEqual(RAIL_THICKNESS_MM, 3.0)
+        self.assertEqual(RAIL_PROFILE_HEIGHT_MM, 40.0)
+
+        for name, cfg in demo_configurations().items():
+            derived = derive_configuration(cfg)
+            checks = verify_configuration(cfg, derived)
+            self.assertTrue(checks["rule_3_fixed_leg_profile"], f"{name} failed rule 3")
+            self.assertTrue(checks["rule_5_5_load_support_min_3_rollers"], f"{name} failed rule 5.5")
+            self.assertTrue(checks["rule_6_1_constant_rail_thickness"], f"{name} failed rule 6.1")
+            self.assertTrue(checks["rule_6_3_identical_leg_profile"], f"{name} failed rule 6.3")
+            self.assertTrue(checks["rule_6_6_no_non_uniform_scale"], f"{name} failed rule 6.6")
+            self.assertTrue(checks["design_rules_checklist_passed"], f"{name} failed design rules checklist")
+            self.assertTrue(checks["all"], f"{name} failed overall verification")
+
 
 if __name__ == "__main__":
     unittest.main()
