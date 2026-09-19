@@ -95,18 +95,112 @@ recommendation layer proposes specifications only; it never generates CAD.
 
 ---
 
+## Install and run in Fusion 360
+
+The `conveyor_addin/` folder is a self-contained Fusion add-in
+(manifest + dialog + engines + presets). Install once, then run it
+from inside Fusion.
+
+### 1. Prerequisites
+
+- Autodesk Fusion 360 (2026 build recommended), Desktop, signed in.
+- This repo cloned / downloaded locally.
+- No extra Python packages needed inside Fusion — Fusion ships its own interpreter.
+
+### 2. Install the add-in
+
+**Option A — automatic (recommended)**
+
+```bash
+python install_addin.py
+```
+
+This copies `conveyor_addin/` to Fusion's Add-Ins folder(s):
+
+- Windows: `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\conveyor_addin`
+- macOS: `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/conveyor_addin`
+
+You should see `Successfully installed to: ...` for each location found.
+
+**Option B — manual copy**
+
+1. Locate Fusion's Add-Ins folder:
+   - Windows: `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\`
+   - macOS: `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/`
+2. Copy the whole repo `conveyor_addin/` folder there, so you end up with:
+   `.../AddIns/conveyor_addin/conveyor_addin.manifest` plus
+   `conveyor_addin.py`, `presets.json`, `fusion_conveyor_generator.py`,
+   `fusion_curve_module.py`, etc.
+3. Restart Fusion if it was already open.
+
+### 3. Enable the add-in
+
+1. In Fusion: **Utilities → Scripts and Add-Ins** (or `Shift + S`).
+2. Switch to the **Add-Ins** tab → select `conveyor_addin`
+   (shows as **Parametric Conveyor Generator**).
+3. Click **Run**, and tick **Run on Startup** so it stays available.
+4. If the version / OS in the panel looks stale after a repo update,
+   re-run `python install_addin.py` (or re-copy), then restart Fusion.
+
+### 4. Run it — build your first conveyor
+
+1. Open or create a **Design** document (one module = one document).
+2. Go to the toolbar panel where the add-in registered its commands
+   (`Solid → Create` / `Scripts and Add-Ins` panel):
+   - **Parametric Conveyor Generator** — build straight or curved modules.
+   - **Dock Next Conveyor Module** — snap the next module to an existing line outlet.
+3. In the dialog:
+   - Pick **Module Type**: `Straight Section` or `Curved 30° / 45° / 60° / 90° Section`.
+   - Pick a **Preset** (e.g. `C2: Medium Standard (With Guards)`), or choose
+     `Custom (Manual)` and type millimetre values.
+   - Watch the **Live Engineering Preview** (roller count, pitch, steel mass,
+     rated load) and the **Status / Export Log**.
+   - Click **Build / Apply**. Re-clicking reconfigures the same model in
+     place — no duplicate solids.
+4. Tweak any time via **Modify → Change Parameters**
+   (`ConvLength`, `ConvWidth`, `FrameHeight`, `RollerDia`, `RollerSpacing`,
+   `LegSpacing`, `GuardHeight`, `C_CurveAngle`).
+
+### 5. Where your files go
+
+When **Export STEP + BOM + OPC-UA on Apply** is ticked, each build writes to:
+
+- Windows: `~/ConveyorGenerator_Output/`
+- macOS: `~/ConveyorGenerator_Output/`
+
+You get per-module `.step`, `BOM.csv` with masses, `validation_report.txt`,
+and OPC-UA NodeSet JSONs. Offline demo outputs instead go to `out/demo_line/`
+(see below).
+
+### 6. Updating / uninstalling
+
+- Update: pull the repo, re-run `python install_addin.py`, restart Fusion.
+- Uninstall: in **Scripts and Add-Ins → Add-Ins**, select `conveyor_addin` →
+  **Stop**, untick **Run on Startup**, then delete the
+  `.../AddIns/conveyor_addin` folder.
+
+### 7. Troubleshooting
+
+- Add-in not listed → check the folder contains `conveyor_addin.manifest`
+  one level down (`AddIns/conveyor_addin/conveyor_addin.manifest`), then restart Fusion.
+- `Part Design documents can only contain one component` → expected: keep one
+  module per document and assemble lines in a separate assembly doc via
+  `addExistingComponent` (see `Docs/ASSEMBLY.md`).
+- Stale dialog / old preset → you ran from a cached copy; reinstall + restart.
+- Dialog errors are appended to `~/ConveyorGenerator_Output/dialog_errors.log`.
+
+Full click-through script: `Docs/DEMO_RUNBOOK.md`.
+
+---
+
 ## Quick start
 
 ### In Fusion 360 — Add-In (recommended)
 
-1. Place the `conveyor_addin/` folder together with
-   `fusion_conveyor_generator.py` in the Add-Ins directory
-   (`%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\` on Windows).
-2. Under **Scripts and Add-Ins → Add-Ins**, start `conveyor_addin`
-   (enable *Run on Startup* to keep it).
-3. Use the toolbar command: typed millimetre inputs with live preview
-   (counts, mass, rated load), one-click STEP + BOM export, and in-place
-   reconfiguration of the existing model.
+See **Install and run in Fusion 360** above for the full guide. Short version:
+`python install_addin.py`, then in Fusion **Scripts and Add-Ins → Add-Ins**
+→ Run `conveyor_addin` with **Run on Startup**, then use the toolbar
+**Parametric Conveyor Generator** command.
 
 ### In Fusion 360 — Script
 
