@@ -479,6 +479,7 @@ def _export_current(design: "adsk.fusion.Design", refs: dict, values: dict,
     step_path = fcg.export_step_file(design, refs["component"], tag, output_dir)
     return f"{tag}: PASS. BOM ({bom_name}) + OPC-UA ({opc_name}) + STEP ({os.path.basename(step_path)}) exported."
 
+
 def _workspace_candidates(ui):
     """Return the active workspace first, followed by known Fusion workspaces."""
     candidates = []
