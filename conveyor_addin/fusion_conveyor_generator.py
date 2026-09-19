@@ -1454,7 +1454,7 @@ def setup_roller_motion_mechanism(
         cw_param = up.itemByName("ConvWidth") if up else None
         h_param = up.itemByName("FrameHeight") if up else None
 
-        roller_count = int(round(float(rc_param.value))) if rc_param else 10
+        roller_count = round(float(rc_param.value)) if rc_param else 10
         pitch_mm = float(p_param.value * 10.0 if p_param and p_param.unit != "mm" else (p_param.value if p_param else 100.0))
         roller_dia = float(d_param.value * 10.0 if d_param and d_param.unit != "mm" else (d_param.value if d_param else 50.0))
         margin_mm = roller_dia / 2.0 + 10.0
