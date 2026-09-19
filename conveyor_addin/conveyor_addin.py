@@ -77,6 +77,17 @@ CURVE_SPECS = (
     ("in_angle", "Curve Angle", "deg", "Arc angle: 30, 45, 60, 90, 180 deg"),
 )
 
+# Dialog layout contract retained for older Fusion builds and offline tests.
+DIALOG_MIN_WIDTH = 440
+DIALOG_MIN_HEIGHT = 650
+TAB_SETUP_ID = "tab_setup"
+TAB_DIMS_ID = "tab_dimensions"
+TAB_CAPACITY_ID = "tab_capacity"
+TAB_PREVIEW_ID = "tab_preview"
+SETUP_HELP_ID = "help_setup"
+PREVIEW_ROWS = 4
+LOG_ROWS = 3
+
 # Keep backward-compatible tuple for existing tests
 INPUT_SPECS = STRAIGHT_SPECS
 
@@ -143,6 +154,125 @@ def dialog_defaults() -> dict:
         GUARDS_ID: demo.side_guards,
         "in_radius": 800.0,
         "in_angle": 90.0,
+    }
+
+
+def _try_separator(container, sep_id: str) -> None:
+    """Add a visual separator when the active Fusion build supports it."""
+    try:
+        container.addSeparatorCommandInput(sep_id)
+    except Exception:
+        pass
+
+
+def build_dialog_layout(inputs, defaults: dict, presets: Dict[str, Dict[str, Any]], adsk_mod=None):
+    """Build the tabbed command layout with a flat fallback."""
+    mod = adsk_mod if adsk_mod is not None else adsk
+    drop_style = mod.core.DropDownStyles.LabeledIconDropDownStyle
+    try:
+        tab_setup = inputs.addTabCommandInput(TAB_SETUP_ID, "Setup")
+        tab_dims = inputs.addTabCommandInput(TAB_DIMS_ID, "Dimensions")
+        tab_capacity = inputs.addTabCommandInput(TAB_CAPACITY_ID, "Capacity & Options")
+        tab_preview = inputs.addTabCommandInput(TAB_PREVIEW_ID, "Preview & Status")
+        tabbed = True
+        tabs = [tab_setup, tab_dims, tab_capacity, tab_preview]
+        setup_inputs = tab_setup.children
+        dims_inputs = tab_dims.children
+        capacity_inputs = tab_capacity.children
+        preview_inputs = tab_preview.children
+    except Exception:
+        tabbed = False
+        tabs = []
+        setup_inputs = dims_inputs = capacity_inputs = preview_inputs = inputs
+
+    type_drop = setup_inputs.addDropDownCommandInput(MODULE_TYPE_ID, "Module Type", drop_style)
+    type_drop.listItems.add("Straight Section", True)
+    type_drop.listItems.add("Curved 90° Section", False)
+    type_drop.listItems.add("Curved 45° Section", False)
+    type_drop.listItems.add("Curved 30° Section", False)
+    type_drop.listItems.add("Curved 60° Section", False)
+
+    preset_drop = setup_inputs.addDropDownCommandInput(PRESET_ID, "Preset / Template", drop_style)
+    preset_drop.listItems.add("Custom (Manual)", False)
+    for name in presets:
+        preset_drop.listItems.add(name, name == defaults[PRESET_ID])
+    try:
+        setup_inputs.addTextBoxCommandInput(
+            SETUP_HELP_ID, "How to use",
+            "Choose a module, select a preset, edit dimensions, review the preview, then Build / Apply.",
+            2, True,
+        )
+    except Exception:
+        pass
+    _try_separator(setup_inputs, "sep_setup")
+
+    shared_group = dims_inputs.addGroupCommandInput("group_straight", "Shared Conveyor Dimensions")
+    for spec_id, label, unit, _key, tip in STRAIGHT_SPECS:
+        item = shared_group.children.addValueInput(
+            spec_id, label, unit,
+            mod.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}"),
+        )
+        item.tooltip = tip
+
+    _try_separator(dims_inputs, "sep_dimensions")
+    curved_group = dims_inputs.addGroupCommandInput("group_curved", "Curved Dimensions")
+    curved_group.isVisible = False
+    for spec_id, label, unit, tip in CURVE_SPECS:
+        item = curved_group.children.addValueInput(
+            spec_id, label, unit,
+            mod.core.ValueInput.createByString(f"{defaults[spec_id]} {unit}"),
+        )
+        item.tooltip = tip
+
+    capacity_group = capacity_inputs.addGroupCommandInput(
+        "group_capacity", "Autonomous Capacity & Duty Sizing"
+    )
+    duty_drop = capacity_group.children.addDropDownCommandInput(
+        DUTY_CLASS_ID, "Duty Rating", drop_style
+    )
+    for name, selected in (
+        ("Custom (Manual Specs)", False),
+        ("Light Duty (150 kg - Cartons & Totes)", False),
+        ("Medium Duty (450 kg - Boxes & Parts)", True),
+        ("Heavy Duty (1000 kg - Crates & Machinery)", False),
+        ("Pallet Heavy (2000 kg - Full Pallets)", False),
+    ):
+        duty_drop.listItems.add(name, selected)
+    capacity_group.children.addStringValueInput(
+        TARGET_LOAD_ID, "Target Payload", f"{defaults[TARGET_LOAD_ID]:.0f} kg"
+    )
+    capacity_group.children.addBoolValueInput(
+        AUTO_OPTIMIZE_ID, "Autonomous On-The-Fly Sizing", True, "",
+        defaults[AUTO_OPTIMIZE_ID],
+    )
+
+    options_group = capacity_inputs.addGroupCommandInput("group_options", "Options & Accessories")
+    options_group.children.addBoolValueInput(
+        GUARDS_ID, "Side Guards", True, "", defaults[GUARDS_ID]
+    )
+    options_group.children.addBoolValueInput(
+        CROSS_BRACE_ID, "Leg Cross-Struts", True, "", defaults[CROSS_BRACE_ID]
+    )
+
+    preview_inputs.addTextBoxCommandInput(
+        PREVIEW_ID, "Live Engineering Preview",
+        preview_text(values_to_input(defaults)), PREVIEW_ROWS, True,
+    )
+    preview_inputs.addBoolValueInput(
+        EXPORT_BTN_ID, "Export STEP + BOM + OPC-UA on Apply", True, "", True
+    )
+    _try_separator(preview_inputs, "sep_preview")
+    preview_inputs.addTextBoxCommandInput(
+        LOG_ID, "Status / Export Log", "Ready.", LOG_ROWS, True
+    )
+
+    return {
+        "tabbed": tabbed,
+        "tabs": tabs,
+        "straight_group": shared_group,
+        "curved_group": curved_group,
+        "capacity_group": capacity_group,
+        "options_group": options_group,
     }
 
 
